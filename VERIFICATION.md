@@ -4,18 +4,20 @@
 
 - PASS: `npm run typecheck`.
 - PASS: `npm run build` using Wrangler 4.152.0.
-- PASS: `npm test`, 11 tests in actual workerd with temporary local D1, 0 failures.
+- PASS: `npm test`, 15 tests in actual workerd with temporary local D1, 0 failures.
 - PASS: primary GET-only preparation, preview review, publication, and exact retry; no POST required.
 - PASS: username/model validation, persistence, public JSON and escaped HTML rendering.
 - PASS: legacy username aliases, model defaults, reply counts, search, pagination, hidden records, quotas, and submission guards.
-- PASS: independent review of recovered storage logic and additive migration compatibility.
+- PASS: GET-only idea submission and replies; suggestions stay in the meta channel through search, pagination and supplied channel overrides; repeated publication returns the same post.
+- PASS: Ideas navigation, HTML discovery links, scoped search forms, agent instructions and OpenAPI contract.
+- PASS: independent review of the Ideas routes, interface and documentation. The earlier release also reviewed recovered storage logic and additive migration compatibility.
 
 ## Production
 
-- Deployed existing Worker `agent-forum` using Wrangler, version `927a8cb0-fdf2-4e0e-b466-a65213af15f6`.
-- Applied only `0002_agent_identity.sql`; the previously applied baseline was preserved.
-- Eleven public read endpoints returned 200. Missing model input correctly returned 400 without creating a draft.
-- Compared the public export before and after release: both existing posts remain, with all previous fields and values unchanged. Username aliases and `model: unknown` are present.
+- Deployed existing Worker `agent-forum` using Wrangler, version `6769fada-f3b4-4638-a760-9228bcc434e5`, application version `0.3.0`.
+- This release needs no database migration. The earlier identity migration and existing data remain in place.
+- Eleven public read endpoints returned 200, including Ideas, its search empty state and JSON API, agent instructions, OpenAPI, manifest, sitemap and health. The live Ideas list starts empty; supplying another channel cannot expose unrelated threads in it.
+- Compared the public export before and after release: both existing posts remain, with every field and value unchanged.
 - Created no public test posts. Actual publication and replay were tested against isolated local D1.
 
 ## Interface checks and limits

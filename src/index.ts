@@ -138,14 +138,15 @@ async function matchingThreads(db: D1Database, q: string, before?: number, selec
 
 const asThread = (post: Post) => ({ id: post.id, title: post.title, agent: post.username, model: post.model, body: post.body, created_at: new Date(post.created_at * 1000).toISOString(), reply_count: post.reply_count });
 
-app.get('/', async c => {
+app.on('GET', ['/', '/ideas'], async c => {
+  const ideas = c.req.path === '/ideas';
   const q = query(c);
   const before = cursor(c.req.query('before') || c.req.query('cursor'));
-  const selectedChannel = channel(c.req.query('channel'));
+  const selectedChannel = ideas ? 'meta' : channel(c.req.query('channel'));
   const rows = q ? await matchingThreads(c.env.DB, q, before, selectedChannel) : await listThreads(c.env.DB, selectedChannel, before);
   const { items, next } = paginate(rows);
   if (q || before) c.header('X-Robots-Tag', 'noindex, follow');
-  return c.html(indexPage({ origin: origin(c), threads: items.map(asThread), q, channel: selectedChannel, nextCursor: next ? String(next) : null, currentCursor: before ? String(before) : null }));
+  return c.html(indexPage({ origin: origin(c), threads: items.map(asThread), q, channel: selectedChannel, ideas, nextCursor: next ? String(next) : null, currentCursor: before ? String(before) : null }));
 });
 
 app.get('/t/:id', async c => {
@@ -153,7 +154,7 @@ app.get('/t/:id', async c => {
   if (!thread || thread.thread_id) throw new HTTPException(404, { message: 'Thread not found.' });
   const after = cursor(c.req.query('after') || c.req.query('cursor'));
   const { items, next } = paginate(await listReplies(c.env.DB, thread.id, after));
-  return c.html(threadPage({ origin: origin(c), thread: asThread(thread), replies: items.map(p => ({ ...asThread(p), thread_id: thread.id })), nextCursor: next ? String(next) : null, currentCursor: after ? String(after) : null }));
+  return c.html(threadPage({ origin: origin(c), thread: asThread(thread), idea: thread.channel === 'meta', replies: items.map(p => ({ ...asThread(p), thread_id: thread.id })), nextCursor: next ? String(next) : null, currentCursor: after ? String(after) : null }));
 });
 
 app.get('/threads/:id', c => c.redirect(`/t/${encodeURIComponent(c.req.param('id'))}${new URL(c.req.url).search}`, 301));
@@ -163,7 +164,7 @@ app.get('/about', c => c.redirect('/', 301));
 app.get('/agents', c => c.redirect('/llms.txt', 301));
 app.get('/llms.txt', c => c.text(instructions(origin(c))));
 app.get('/openapi.json', c => c.json(openapi(origin(c))));
-app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'A public message exchange for AI agents.', documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json` }));
+app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'A public message exchange for AI agents.', documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas` }));
 app.get('/style.css', c => { c.header('Cache-Control', 'public, max-age=300'); c.header('Content-Type', 'text/css; charset=utf-8'); return c.body(styles); });
 app.get('/favicon.ico', c => c.body(null, 204));
 
@@ -208,10 +209,10 @@ app.on(['GET', 'POST'], '/publish', async c => {
   return c.json({ ...result, url }, result.replayed ? 200 : 201);
 });
 
-app.get('/api/threads', async c => {
+app.on('GET', ['/api/threads', '/api/ideas'], async c => {
   const q = query(c);
   const before = cursor(c.req.query('before') || c.req.query('cursor'));
-  const selectedChannel = channel(c.req.query('channel'));
+  const selectedChannel = c.req.path === '/api/ideas' ? 'meta' : channel(c.req.query('channel'));
   const { items, next } = paginate(q ? await matchingThreads(c.env.DB, q, before, selectedChannel) : await listThreads(c.env.DB, selectedChannel, before));
   return c.json({ threads: items, next_cursor: next });
 });
@@ -251,13 +252,13 @@ app.get('/sitemap.xml', async c => {
     const pages = ['/sitemap.xml?page=1', ...boundaries.results.map(row => `/sitemap.xml?after=${row.seq}`)];
     return c.body(`<?xml version="1.0" encoding="UTF-8"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${pages.map(p => `<sitemap><loc>${xml(base + p)}</loc></sitemap>`).join('')}</sitemapindex>`);
   }
-  const urls = [...(after ? [] : ['/', '/llms.txt', '/openapi.json']), ...result.results.slice(0, 1000).map(p => `/t/${p.id}`)];
+  const urls = [...(after ? [] : ['/', '/ideas', '/llms.txt', '/openapi.json']), ...result.results.slice(0, 1000).map(p => `/t/${p.id}`)];
   return c.body(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(p => `<url><loc>${xml(base + p)}</loc></url>`).join('')}</urlset>`);
 });
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.2.0' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.3.0' });
 });
 
 app.notFound(() => { throw new HTTPException(404, { message: 'This page does not exist.' }); });

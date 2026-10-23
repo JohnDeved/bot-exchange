@@ -51,6 +51,12 @@ function fixtures() {
   insertPost(201, { parent: fixtureId(200), channel: 'meta', body: 'Secretneedle child' });
   insertPost(202, { parent: fixtureId(100), channel: 'general', body: 'Secretneedle hidden reply' });
   statements.push(`UPDATE posts SET hidden=1 WHERE id IN (${sqlValue(fixtureId(200))},${sqlValue(fixtureId(202))});`);
+  for (let n = 400; n <= 421; n++) insertPost(n, { title: `Idea fixture ${n}`, body: 'Ideafixturetoken feature suggestion', channel: 'meta' });
+  insertPost(422, { title: 'Hidden idea fixture', body: 'Ideafixturetoken hidden suggestion', channel: 'meta' });
+  statements.push(`UPDATE posts SET hidden=1 WHERE id=${sqlValue(fixtureId(422))};`);
+  statements.push(`UPDATE posts SET body='Paginationfixture Ideafixturetoken non-idea match' WHERE id=${sqlValue(fixtureId(1))};`);
+  insertPost(423, { parent: fixtureId(400), channel: 'meta', body: 'Ideareplyonly feature discussion' });
+  insertPost(424, { parent: fixtureId(1), channel: 'experiments', body: 'Ideareplyonly unrelated discussion' });
   for (const [token, postId, expires] of [[expiredToken, fixtureId(300), now - 1], [hiddenToken, fixtureId(200), now + 900]]) {
     const values = [digest(token), postId, null, 'Prepared fixture', 'Fixture draft', 'Fixture Agent', 'agent', 'general', 'fixture', now - 100, expires];
     statements.push(`INSERT INTO drafts(token_hash,post_id,thread_id,title,body,author,author_kind,channel,client_key,created_at,expires_at) VALUES(${values.map(sqlValue).join(',')});`);
@@ -290,4 +296,92 @@ test('source quota boundaries allow the last request, reject the next, and permi
   assert.equal(replay.replayed, true);
   assert.equal(replay.post.id, published.post.id);
   await json(await request(second.preview.publish_url, {}, postLimitedIp), 429);
+});
+
+test('Ideas can be prepared, published and retried using only GET; replies inherit meta', async () => {
+  const fields = input({ channel: 'meta', title: 'Ideasflowtoken: remember search filters', username: 'Idea Agent + one', model: 'Vendor/Idea Model' });
+  const { preview } = await json(await getPrepare(fields));
+  assert.equal(preview.input.channel, 'meta');
+  assert.equal((await json(await request('/api/ideas?q=Ideasflowtoken'))).threads.length, 0);
+  const created = await json(await request(preview.publish_url), 201);
+  assert.equal(created.post.channel, 'meta');
+  assert.equal(created.post.username, fields.username);
+  assert.equal(created.post.model, fields.model);
+  const replay = await json(await request(preview.publish_url));
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.post.id, created.post.id);
+  assert.deepEqual((await json(await request('/api/ideas?q=Ideasflowtoken'))).threads.map(post => post.id), [created.post.id]);
+
+  const replyInput = { thread: created.post.id, body: 'Ideasreplytoken: keep the chosen query.', username: 'Idea Reply Agent', model: 'Reply Model' };
+  const replyPreview = await json(await getPrepare(replyInput));
+  assert.equal(replyPreview.preview.input.channel, 'meta');
+  const reply = await json(await request(replyPreview.preview.publish_url), 201);
+  assert.equal(reply.post.channel, 'meta');
+  assert.equal(reply.post.username, replyInput.username);
+  assert.equal(reply.post.model, replyInput.model);
+  assert.equal((await json(await request(replyPreview.preview.publish_url))).replayed, true);
+  const thread = await json(await request(`/api/threads/${created.post.id}`));
+  assert.equal(thread.thread.reply_count, 1);
+  assert.deepEqual(thread.replies.map(post => post.id), [reply.post.id]);
+  assert.deepEqual((await json(await request('/api/ideas?q=Ideasreplytoken'))).threads.map(post => post.id), [created.post.id]);
+});
+
+test('Ideas root search and both pagination cursors remain isolated to visible meta threads', async () => {
+  const first = await json(await request('/api/ideas?q=Ideafixturetoken'));
+  assert.equal(first.threads.length, 20);
+  assert.ok(first.next_cursor);
+  assert.ok(first.threads.every(post => post.channel === 'meta' && post.thread_id === null));
+  assert.deepEqual(first, await json(await request('/api/threads?channel=meta&q=Ideafixturetoken')));
+  assert.deepEqual(first, await json(await request('/api/ideas?q=Ideafixturetoken&channel=experiments')));
+  const second = await json(await request(`/api/ideas?q=Ideafixturetoken&before=${first.next_cursor}`));
+  assert.equal(second.threads.length, 2);
+  assert.equal(second.next_cursor, null);
+  assert.deepEqual(second, await json(await request(`/api/ideas?q=Ideafixturetoken&cursor=${first.next_cursor}`)));
+  assert.deepEqual([...first.threads, ...second.threads].map(post => post.id), Array.from({ length: 22 }, (_, index) => fixtureId(421 - index)));
+
+  const page = await (await status(await request('/ideas?q=Ideafixturetoken'), 200)).text();
+  for (const post of first.threads) assert.ok(page.includes(`/t/${post.id}`));
+  for (const n of [1, 400, 401, 422]) assert.ok(!page.includes(`/t/${fixtureId(n)}`));
+  const nextPage = await (await status(await request(`/ideas?q=Ideafixturetoken&cursor=${first.next_cursor}`), 200)).text();
+  for (const post of second.threads) assert.ok(nextPage.includes(`/t/${post.id}`));
+  for (const n of [1, 402, 421, 422]) assert.ok(!nextPage.includes(`/t/${fixtureId(n)}`));
+});
+
+test('Ideas reply search returns only its meta root and cannot switch channels', async () => {
+  const global = await json(await request('/api/threads?q=Ideareplyonly'));
+  assert.deepEqual(new Set(global.threads.map(post => post.id)), new Set([fixtureId(1), fixtureId(400)]));
+  const ideas = await json(await request('/api/ideas?q=Ideareplyonly&channel=experiments'));
+  assert.deepEqual(ideas.threads.map(post => post.id), [fixtureId(400)]);
+  const page = await (await status(await request('/ideas?q=Ideareplyonly&channel=experiments'), 200)).text();
+  assert.ok(page.includes(`/t/${fixtureId(400)}`));
+  assert.ok(!page.includes(`/t/${fixtureId(1)}`));
+  assert.deepEqual((await json(await request('/api/ideas?q=Secretneedle'))).threads, []);
+});
+
+test('Ideas discovery, search and next-page links stay on the Ideas routes without posting controls', async () => {
+  const page = await (await status(await request('/ideas?q=Ideafixturetoken'), 200)).text();
+  const metadata = (relation, type) => {
+    const tag = page.match(/<link\b[^>]*>/g).find(tag => tag.includes(`rel="${relation}"`) && (!type || tag.includes(`type="${type}"`)));
+    assert.ok(tag, `Missing ${relation} metadata`);
+    return new URL(tag.match(/\bhref="([^"]+)"/)[1].replaceAll('&amp;', '&'));
+  };
+  assert.equal(metadata('canonical').pathname, '/ideas');
+  const alternate = metadata('alternate', 'application/json');
+  assert.equal(alternate.pathname, '/api/ideas');
+  assert.equal(alternate.searchParams.get('q'), 'Ideafixturetoken');
+  const next = metadata('next');
+  assert.equal(next.pathname, '/ideas');
+  assert.equal(next.searchParams.get('q'), 'Ideafixturetoken');
+  assert.ok(next.searchParams.get('cursor') || next.searchParams.get('before'));
+  assert.match(page, /<form[^>]+action="\/ideas"[^>]+method="get"/);
+  assert.match(page, /<a[^>]+href="\/ideas"[^>]*>Ideas<\/a>/);
+  assert.doesNotMatch(page, /<textarea\b|<form[^>]+method="post"|<form[^>]+action="\/(?:prepare|publish)"|<button[^>]*>\s*(?:Post|Submit idea|Publish)/i);
+  const docs = await (await status(await request('/llms.txt'), 200)).text();
+  assert.match(docs, /\/ideas\b/);
+  assert.match(docs, /\/api\/ideas\b/);
+  assert.match(docs, /channel=meta/);
+  const api = await json(await request('/openapi.json'));
+  assert.ok(api.paths['/api/ideas'].get);
+  const published = await request('/api/ideas', { method: 'POST' });
+  await json(published, 405);
 });
