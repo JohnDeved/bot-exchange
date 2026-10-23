@@ -109,10 +109,33 @@ async function json(response, expected = 200) {
   return response.json();
 }
 
+const decodeHtml = value => value.replace(/&(?:amp|lt|gt|quot|apos|#\d+|#x[\da-f]+);/gi, entity => {
+  const named = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'" };
+  return named[entity] ?? String.fromCodePoint(entity[2].toLowerCase() === 'x' ? Number.parseInt(entity.slice(3, -1), 16) : Number(entity.slice(2, -1)));
+});
+
+async function html(response, expected = 200) {
+  await status(response, expected);
+  assert.match(response.headers.get('content-type'), /text\/html/);
+  const source = await response.text();
+  return {
+    source,
+    headers: response.headers,
+    text: decodeHtml(source.replace(/<[^>]*>/g, ' ')),
+    links: Array.from(source.matchAll(/<a\b[^>]*\bhref="([^"]+)"[^>]*>/g), match => decodeHtml(match[1])),
+  };
+}
+
+function actionLink(page, pathname) {
+  const links = page.links.filter(href => /^https?:\/\//.test(href) && new URL(href).pathname === pathname);
+  assert.equal(links.length, 1, `Expected one absolute link to ${pathname}`);
+  return links[0];
+}
+
 const input = (fields = {}) => ({ title: 'Runtime test discussion', body: 'A public integration-test message.', username: 'Test Agent', model: 'Test Model', ...fields });
 const postJson = (path, data, source) => request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }, source);
 const postForm = (path, data, source) => request(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(data).toString() }, source);
-const getPrepare = (data, source) => request(`/prepare?${new URLSearchParams(data)}`, {}, source);
+const getPrepare = (data, source) => request(`/prepare?${new URLSearchParams({ format: 'json', ...data })}`, {}, source);
 
 test('SSR is readable without scripts and exposes discovery without posting forms', async () => {
   const response = await status(await request('/'), 200);
@@ -122,7 +145,7 @@ test('SSR is readable without scripts and exposes discovery without posting form
   assert.match(head, /rel="describedby"[^>]+\/llms\.txt/);
   assert.match(head, /rel="service-desc"[^>]+\/openapi\.json/);
   assert.match(head, /rel="alternate"[^>]+application\/json/);
-  assert.match(html, /<aside class="agent-interface"[^>]*>[\s\S]*?href="[^"]+\/llms\.txt"/);
+  assert.match(html, /<(?:p|aside) class="agent-interface"[^>]*>[\s\S]*?href="[^"]+\/llms\.txt"/);
   const css = await (await status(await request('/style.css'), 200)).text();
   assert.match(css, /\.agent-interface\s*\{[^}]*clip-path:\s*inset\(50%\)/);
   assert.match(response.headers.get('link'), /llms\.txt.*describedby/);
@@ -155,13 +178,14 @@ test('legacy records expose username and unknown model; root pagination has no g
   assert.deepEqual(ids, Array.from({ length: 22 }, (_, index) => fixtureId(22 - index)));
 });
 
-test('browse-only agents can GET a preview, GET its publish_url, and safely retry that URL', async () => {
+test('JSON browse clients can GET a preview, GET its publish_url, and safely retry that URL', async () => {
   const fields = input({ username: 'Browse Agent + one', model: 'Vendor/Model (test)', title: 'Browse-only workflow', body: 'GET can publish after an explicit preview.' });
   const prepared = await json(await getPrepare(fields));
   assert.equal(prepared.preview.input.username, fields.username);
   assert.equal(prepared.preview.input.model, fields.model);
   assert.match(prepared.preview.token, /^[a-f0-9]{64}$/);
   assert.equal(new URL(prepared.preview.publish_url).searchParams.get('confirm'), 'publish');
+  assert.equal(new URL(prepared.preview.publish_url).searchParams.get('format'), 'json');
   const published = await json(await request(prepared.preview.publish_url), 201);
   assert.equal(published.post.username, fields.username);
   assert.equal(published.post.model, fields.model);
@@ -171,8 +195,108 @@ test('browse-only agents can GET a preview, GET its publish_url, and safely retr
   assert.equal(retried.post.id, published.post.id);
   const archive = await json(await request('/export.json'));
   assert.equal(archive.posts.filter(post => post.id === published.post.id).length, 1);
-  const invalid = await json(await request('/prepare'), 400);
+  const invalid = await json(await request('/prepare?format=json'), 400);
   assert.equal(invalid.error.status, 400);
+});
+
+test('HTML-only browsing can review, publish and follow a thread and reply without duplicate retries', async () => {
+  const fields = input({ title: '  Htmlbrowseflowtoken <review> & publish  ', body: '  First line <b>plain text</b> & evidence.\r\nSecond line: café.  ', username: '  Browse <Agent> + one  ', model: '  Vendor/Model "test"  ', channel: 'meta' });
+  const expected = { ...fields, title: fields.title.trim(), body: fields.body.trim().replaceAll('\r\n', '\n'), username: fields.username.trim(), model: fields.model.trim() };
+  const preview = await html(await request(`/prepare?${new URLSearchParams(fields)}`));
+  assert.equal(preview.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive');
+  assert.equal(preview.headers.get('vary'), 'Accept');
+  assert.match(preview.source, /<a\b[^>]*href="https?:\/\/[^"]+\/publish\?[^"]*"[^>]*rel="nofollow"/);
+  for (const value of [expected.title, expected.body, `Username: ${expected.username}`, `Model: ${expected.model}`, 'Author kind: agent', 'Channel: meta', 'Destination: New thread', 'Draft expires:']) assert.ok(preview.text.includes(value), `Preview is missing ${value}`);
+  assert.doesNotMatch(preview.source, /<script\b|<b\b|<review\b|<Agent\b/i);
+  const expiry = preview.source.match(/<time\b[^>]*datetime="([^"]+)"/);
+  assert.ok(expiry);
+  assert.ok(Date.parse(expiry[1]) > Date.now());
+  const publishUrl = actionLink(preview, '/publish');
+  assert.equal(new URL(publishUrl).searchParams.get('format'), null);
+  assert.equal(new URL(publishUrl).searchParams.get('confirm'), 'publish');
+  assert.match(new URL(publishUrl).searchParams.get('token'), /^[a-f0-9]{64}$/);
+  assert.deepEqual((await json(await request('/api/ideas?q=Htmlbrowseflowtoken'))).threads, []);
+
+  const published = await html(await request(publishUrl));
+  assert.equal(published.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive');
+  assert.equal(published.headers.get('vary'), 'Accept');
+  for (const value of [expected.title, expected.body, expected.username, expected.model, 'Author kind: agent', 'Channel: meta']) assert.ok(published.text.includes(value), `Receipt is missing ${value}`);
+  const threadUrl = published.links.find(href => /^https?:\/\/[^/]+\/t\/[^/?#]+$/.test(href));
+  assert.ok(threadUrl, 'Publication must link to the absolute canonical thread URL');
+  const threadId = new URL(threadUrl).pathname.slice('/t/'.length);
+  const threadPage = await html(await request(threadUrl));
+  for (const value of [expected.title, expected.body, expected.username, expected.model]) assert.ok(threadPage.text.includes(value), `Thread is missing ${value}`);
+  assert.doesNotMatch(threadPage.source, /<script\b|<b\b|<review\b|<Agent\b/i);
+  const replay = await html(await request(publishUrl));
+  assert.equal(actionLink(replay, `/t/${threadId}`), threadUrl);
+  assert.deepEqual((await json(await request('/api/ideas?q=Htmlbrowseflowtoken'))).threads.map(post => post.id), [threadId]);
+
+  const replyFields = { thread: threadId, username: 'HTML Reply Agent', model: 'Reply Model', body: '  Htmlreplytoken <em>added use case</em>.\r\nA second line.  ' };
+  const expectedReplyBody = replyFields.body.trim().replaceAll('\r\n', '\n');
+  const replyPreview = await html(await request(`/prepare?${new URLSearchParams(replyFields)}`));
+  for (const value of [replyFields.username, replyFields.model, expectedReplyBody, 'Author kind: agent', 'Channel: meta', expected.title, threadId, 'Draft expires:']) assert.ok(replyPreview.text.includes(value), `Reply preview is missing ${value}`);
+  assert.equal(actionLink(replyPreview, `/t/${threadId}`), threadUrl);
+  const replyPublishUrl = actionLink(replyPreview, '/publish');
+  assert.equal(new URL(replyPublishUrl).searchParams.get('format'), null);
+  assert.equal((await json(await request(`/api/threads/${threadId}`))).thread.reply_count, 0);
+  const replyPublished = await html(await request(replyPublishUrl));
+  const replyUrl = actionLink(replyPublished, `/t/${threadId}`);
+  assert.match(new URL(replyUrl).hash, /^#p-[a-f\d-]+$/);
+  const replyId = new URL(replyUrl).hash.slice('#p-'.length);
+  const replyPage = await html(await request(replyUrl));
+  for (const value of [replyFields.username, replyFields.model, expectedReplyBody]) assert.ok(replyPage.text.includes(value), `Published reply is missing ${value}`);
+  assert.doesNotMatch(replyPage.source, /<em\b/);
+  assert.equal(actionLink(await html(await request(replyPublishUrl)), `/t/${threadId}`), replyUrl);
+  const record = await json(await request(`/api/threads/${threadId}`));
+  assert.equal(record.thread.reply_count, 1);
+  assert.deepEqual(record.replies.map(post => post.id), [replyId]);
+  assert.equal(record.replies[0].body, expectedReplyBody);
+});
+
+test('GET action errors default to HTML; format and Accept explicitly select JSON', async () => {
+  for (const path of ['/prepare', '/publish']) {
+    const page = await html(await request(path), 400);
+    assert.match(page.source, /<h1>Error 400<\/h1>/);
+    assert.equal(page.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive');
+    assert.equal((await json(await request(`${path}?format=json`), 400)).error.status, 400);
+    assert.equal((await json(await request(path, { headers: { Accept: 'application/json' } }), 400)).error.status, 400);
+  }
+  const fields = input({ title: 'Accept header JSON flow' });
+  const { preview } = await json(await request(`/prepare?${new URLSearchParams(fields)}`, { headers: { Accept: 'application/json' } }));
+  assert.equal(new URL(preview.publish_url).searchParams.get('format'), 'json');
+  const publishUrl = new URL(preview.publish_url);
+  publishUrl.searchParams.delete('format');
+  const published = await json(await request(publishUrl.href, { headers: { Accept: 'application/json' } }), 201);
+  assert.equal(published.replayed, false);
+  assert.equal((await json(await request(preview.publish_url))).replayed, true);
+});
+
+test('ChatGPT-User can follow HTML posting links while indexing crawlers remain blocked', async () => {
+  const robots = await (await status(await request('/robots.txt'), 200)).text();
+  const groups = robots.trim().split(/\n\s*\n/);
+  const group = groups.find(value => value.split('\n').includes('User-agent: ChatGPT-User'));
+  assert.ok(group, 'Missing robots group for ChatGPT-User');
+  assert.match(group, /^Allow: \/$/m);
+  assert.doesNotMatch(group, /^Disallow:/m);
+  assert.doesNotMatch(group, /OAI-SearchBot|GPTBot/);
+  const headers = { 'User-Agent': 'Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/bot)' };
+  const fields = input({ title: 'Retrievalagenttoken ChatGPT-User', username: 'ChatGPT-User', model: 'Test Model', body: 'Deliberate preview and publish navigation.' });
+  const preview = await html(await request(`/prepare?${new URLSearchParams(fields)}`, { headers }));
+  const publishUrl = actionLink(preview, '/publish');
+  const published = await html(await request(publishUrl, { headers }));
+  const result = await json(await request(`/api/threads?q=${encodeURIComponent(fields.title)}`));
+  assert.equal(result.threads.length, 1);
+  assert.equal(result.threads[0].username, fields.username);
+  assert.equal(result.threads[0].body, fields.body);
+  const path = `/t/${result.threads[0].id}`;
+  assert.equal(actionLink(published, path), actionLink(await html(await request(publishUrl, { headers })), path));
+  const wildcard = groups.find(value => value.split('\n').includes('User-agent: *'));
+  assert.ok(wildcard);
+  assert.match(wildcard, /^Disallow: \/prepare$/m);
+  assert.match(wildcard, /^Disallow: \/publish$/m);
+  for (const agent of ['GPTBot', 'OAI-SearchBot']) {
+    for (const path of [`/prepare?${new URLSearchParams(input())}`, publishUrl]) await html(await request(path, { headers: { 'User-Agent': agent } }), 403);
+  }
 });
 
 test('username and model are required strings; identity aliases cannot conflict', async () => {
@@ -231,13 +355,13 @@ test('form submissions preserve the legacy author alias and replies retain usern
 });
 
 test('GET submission guards reject prefetch, HEAD, embedding, cross-site requests and crawlers', async () => {
-  for (const path of [`/prepare?${new URLSearchParams(input())}`, `/publish?token=${'0'.repeat(64)}&confirm=publish`]) {
+  for (const path of [`/prepare?${new URLSearchParams({ ...input(), format: 'json' })}`, `/publish?token=${'0'.repeat(64)}&confirm=publish&format=json`]) {
     const head = await status(await request(path, { method: 'HEAD' }), 405);
     assert.equal(await head.text(), '');
     assert.equal(head.headers.get('allow'), 'GET, POST');
     for (const headers of [
       { Purpose: 'prefetch' }, { 'Sec-Purpose': 'prefetch;prerender' }, { 'Sec-Fetch-Site': 'cross-site' },
-      { 'Sec-Fetch-Dest': 'image' }, { Origin: 'https://unrelated.example' }, { 'User-Agent': 'GPTBot' },
+      { 'Sec-Fetch-Dest': 'image' }, { Origin: 'https://unrelated.example' }, { 'User-Agent': 'GPTBot' }, { 'User-Agent': 'OAI-SearchBot' },
     ]) {
       const result = await json(await request(path, { headers }), 403);
       assert.equal(result.error.status, 403);
@@ -254,11 +378,11 @@ test('malformed, oversized and ambiguous requests fail before creating drafts', 
   await json(await request('/prepare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: ' '.repeat(32769) }), 413);
   await json(await request('/prepare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: new Uint8Array([0xc3, 0x28]) }), 400);
   await json(await getPrepare({ ...input(), unexpected: 'field' }), 400);
-  await json(await request(`/prepare?${new URLSearchParams(input())}&username=duplicate`), 400);
+  await json(await request(`/prepare?${new URLSearchParams({ ...input(), format: 'json' })}&username=duplicate`), 400);
   await json(await postJson('/prepare?title=query-content', input()), 400);
   await json(await getPrepare(input({ body: 'x'.repeat(2001) })), 400);
   await json(await getPrepare(input({ title: 'x'.repeat(121) })), 400);
-  await json(await request(`/prepare?body=${'x'.repeat(12001)}`), 414);
+  await json(await request(`/prepare?format=json&body=${'x'.repeat(12001)}`), 414);
   for (const path of ['/api/threads?cursor=0', '/api/threads?before=-1', '/api/threads?channel=unknown', `/api/search?q=${'x'.repeat(161)}`]) await json(await request(path), 400);
 });
 
@@ -280,9 +404,9 @@ test('hidden roots and replies stay absent from reads, search, export and sitema
   for (const n of [200, 201, 202]) assert.equal(exported.posts.some(post => post.id === fixtureId(n)), false);
   const sitemap = await (await request('/sitemap.xml')).text();
   assert.ok(!sitemap.includes(fixtureId(200)));
-  await json(await request(`/publish?token=${expiredToken}&confirm=publish`), 410);
-  await json(await request(`/publish?token=${hiddenToken}&confirm=publish`), 410);
-  await json(await request(`/publish?token=${'0'.repeat(64)}&confirm=publish`), 404);
+  await json(await request(`/publish?token=${expiredToken}&confirm=publish&format=json`), 410);
+  await json(await request(`/publish?token=${hiddenToken}&confirm=publish&format=json`), 410);
+  await json(await request(`/publish?token=${'0'.repeat(64)}&confirm=publish&format=json`), 404);
 });
 
 test('source quota boundaries allow the last request, reject the next, and permit publish replay', async () => {

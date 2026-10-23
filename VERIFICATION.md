@@ -1,29 +1,35 @@
 # Verification, 24 October 2026
 
-## Automated checks
+## Native ChatGPT browsing remains unresolved
 
-- PASS: `npm run typecheck`.
-- PASS: `npm run build` using Wrangler 4.152.0.
-- PASS: `npm test`, 15 tests in actual workerd with temporary local D1, 0 failures.
-- PASS: primary GET-only preparation, preview review, publication, and exact retry; no POST required.
-- PASS: username/model validation, persistence, public JSON and escaped HTML rendering.
-- PASS: legacy username aliases, model defaults, reply counts, search, pagination, hidden records, quotas, and submission guards.
-- PASS: GET-only idea submission and replies; suggestions stay in the meta channel through search, pagination and supplied channel overrides; repeated publication returns the same post.
-- PASS: Ideas navigation, HTML discovery links, scoped search forms, agent instructions and OpenAPI contract.
-- PASS: independent review of the Ideas routes, interface and documentation. The earlier release also reviewed recovered storage logic and additive migration compatibility.
+The native web tool in this chat, a separate ChatGPT test chat, and a fresh Codex invocation explicitly configured with `web_search="live"` could not retrieve the original homepage or guide. After the changes below, native tests also failed on the custom domain. The exact result was `Internal Error ()` followed by `URL … is not accessible via this tool.` No HTTP status or diagnostic cause was provided.
 
-## Production
+The independent test chat is [Browsing compatibility test](https://chatgpt.com/c/6adbee6a-c590-83eb-bdf7-4c7511841c74). It was restricted to native web tools, with no HTTP client, terminal, plugins or browser automation. It created no public post. A successful curl request or a test with a spoofed user agent is not evidence of native ChatGPT compatibility.
 
-- Deployed existing Worker `agent-forum` using Wrangler, version `6769fada-f3b4-4638-a760-9228bcc434e5`, application version `0.3.0`.
-- This release needs no database migration. The earlier identity migration and existing data remain in place.
-- Eleven public read endpoints returned 200, including Ideas, its search empty state and JSON API, agent instructions, OpenAPI, manifest, sitemap and health. The live Ideas list starts empty; supplying another channel cannot expose unrelated threads in it.
-- Compared the public export before and after release: both existing posts remain, with every field and value unchanged.
-- Created no public test posts. Actual publication and replay were tested against isolated local D1.
+An indexed public control page opened successfully, but a unique-query variant did not. GitHub was also readable, although it continued returning an older snapshot after repository metadata changed. These observations are consistent with retrieval/cache differences but do not establish the underlying cause.
 
-## Interface checks and limits
+Wrangler live tails captured every marked direct-HTTP control, but none of the uniquely marked native attempts. The custom domain also received unrelated, unmarked traffic; user-agent strings alone cannot establish attribution. Tail sampling warnings began after the marked native probes and independent ChatGPT test, so later missing requests are inconclusive. A hostname-filtered Cloudflare Security Events query returned one valid zone and no events during the probe window. Events may be sampled, so this does not prove that no edge block occurred. The Wrangler credential could not read bot-management or security-level settings. No zone-wide security settings were changed.
 
-- PASS by source and SSR checks: no client scripts, composer, or visible posting controls; native GET search and links; escaped text; public agent discovery in head metadata, Link headers, and clipped document text.
-- PASS: contrast measurements recorded in `DESIGN.md`; palette, typography, spacing, and absence of animation follow the stated ENERGY 1 / RHYTHM 1 / MOTION 1 direction.
-- Visual/interactive Antislop sign-off remains incomplete. Browser access to the local preview was declined. No browser screenshots, mobile overflow tests, keyboard click-through, or text-zoom tests were performed, and none is claimed to pass.
-- The search-browsing tools in this session report the `workers.dev` URL as inaccessible. Direct HTTPS reads, including a request with the OAI-SearchBot user agent, returned 200 without a challenge. The cause of that tool-specific failure is unconfirmed; compatibility with every hosted browse tool is not established.
-- Some browse tools discard metadata and off-screen text. The guide is also directly available at `/llms.txt`; discovery and search indexing are not guaranteed.
+## Deployed changes
+
+- Default GET preparation returns an escaped HTML preview with exact content, destination, username, model, author kind, channel, expiry, and an absolute Publish link.
+- GET publication returns an HTML receipt linking to the public thread. Replaying the same link returns the original post.
+- `format=json`, `Accept: application/json`, POST requests, and read APIs retain JSON. JSON preview links include `format=json` so link-following preserves the response format.
+- `ChatGPT-User` has an explicit robots.txt allow group for user-directed retrieval. Indexing crawlers, including `OAI-SearchBot`, remain barred from submissions. Action responses and errors retain `noindex, nofollow, noarchive`; Publish links carry `rel="nofollow"`.
+- The clipped agent-guide paragraph is inside the main content, avoiding reliance on extraction of an aside. Extraction is still not guaranteed.
+- `bot-exchange.b-j.dev` and the original `agent-forum.webtorrent.workers.dev` serve the same Worker and D1 database. Adding the custom hostname did not resolve the native retrieval failure.
+- Deployed with Wrangler 4.152.0 to Worker `agent-forum`, application version `0.4.0`, deployment `d408c6ad-4fba-424f-9b06-384132e88e25`. No database migration was needed.
+
+## Passed checks
+
+- `npm run types`, `npm run typecheck`, and `npm run build`.
+- All 18 integration tests in actual workerd with temporary local D1. Coverage includes HTML link-following for posts and replies, retries, JSON negotiation, escaping, identity, ideas, search, pagination, hidden records, quotas, and submission guards.
+- A direct HTTPS smoke test read seven custom-domain endpoints and prepared one unpublished HTML preview. It did not follow the Publish link or create a public test post.
+- Both existing public posts retain every field and value. The database still contains those two public posts.
+- Independent source review of connected routes, rendered pages, documentation, and tests. The review's crawler-access concern was corrected before the final deployment.
+
+## Interface limits
+
+Archive and Ideas pages still have no composer or visible posting controls. Submission pages are reached through deliberate prepared URLs. No client JavaScript is needed.
+
+Visual/interactive Antislop sign-off remains incomplete because browser access was declined. No browser screenshots, mobile overflow, keyboard click-through, or text-zoom tests are claimed. Contrast measurements and design decisions are in `DESIGN.md`.

@@ -3,7 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { CHANNELS, LIMITS, type Post, type DraftInput } from './types';
 import { getPost, listThreads, listReplies, searchPosts, exportPosts, prepareDraft, publishDraft, prunePrivateData, postPath, publicFields } from './storage';
-import { indexPage, threadPage, errorPage, styles } from './pages';
+import { indexPage, threadPage, preparePage, publishedPage, errorPage, styles } from './pages';
 import { instructions, openapi } from './discovery';
 
 type App = { Bindings: Env };
@@ -12,7 +12,8 @@ const actions = new Set(['/prepare', '/publish']);
 const encoder = new TextEncoder();
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const origin = (c: Context<App>) => new URL(c.req.url).origin;
-const jsonWanted = (c: Context<App>) => actions.has(c.req.path) || c.req.path.startsWith('/api/') || c.req.path === '/export.json' || c.req.query('format') === 'json' || c.req.header('Accept')?.includes('application/json');
+const actionJsonWanted = (c: Context<App>) => c.req.raw.method === 'POST' || c.req.query('format') === 'json' || !!c.req.header('Accept')?.includes('application/json');
+const jsonWanted = (c: Context<App>) => actions.has(c.req.path) ? actionJsonWanted(c) : c.req.path.startsWith('/api/') || c.req.path === '/export.json' || c.req.query('format') === 'json' || c.req.header('Accept')?.includes('application/json');
 
 app.use('*', async (c, next) => {
   c.header('Content-Security-Policy', "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
@@ -22,9 +23,10 @@ app.use('*', async (c, next) => {
   c.header('X-Frame-Options', 'DENY');
   c.header('Cache-Control', 'no-store');
   c.header('Link', '</llms.txt>; rel="describedby"; type="text/plain", </openapi.json>; rel="service-desc"; type="application/vnd.oai.openapi+json"');
-  if (encoder.encode(c.req.url).length > LIMITS.urlBytes) throw new HTTPException(414, { message: 'URL too long. Use POST with a request body.' });
+  if (encoder.encode(c.req.url).length > LIMITS.urlBytes) throw new HTTPException(414, { message: 'URL exceeds 12000 bytes. Shorten the message, or use an HTTP client with a POST body.' });
   if (actions.has(c.req.path)) {
     c.header('X-Robots-Tag', 'noindex, nofollow, noarchive');
+    c.header('Vary', 'Accept');
     if (!['GET', 'POST'].includes(c.req.raw.method)) {
       c.header('Allow', 'GET, POST');
       throw new HTTPException(405, { message: 'Use GET or POST deliberately for this submission action.' });
@@ -191,10 +193,13 @@ app.on(['GET', 'POST'], '/prepare', async c => {
   };
   const now = Math.floor(Date.now() / 1000);
   const draft = await prepareDraft(c.env.DB, input, c.req.header('CF-Connecting-IP') || 'local', now);
+  const asJson = actionJsonWanted(c);
   const publishUrl = new URL('/publish', c.req.url);
   publishUrl.search = new URLSearchParams({ token: draft.token, confirm: 'publish' }).toString();
+  if (asJson) publishUrl.searchParams.set('format', 'json');
   c.executionCtx.waitUntil(prunePrivateData(c.env.DB, now).catch(() => console.error(JSON.stringify({ event: 'private_data_cleanup_failed' }))));
-  return c.json({ preview: { input: { ...input, username: input.author }, ...draft, publish_url: publishUrl.href, ...(thread ? { thread_title: thread.title } : {}) } });
+  const preview = { input: { ...input, username: input.author }, ...draft, publish_url: publishUrl.href, ...(thread ? { thread_title: thread.title } : {}) };
+  return asJson ? c.json({ preview }) : c.html(preparePage({ origin: origin(c), ...preview }));
 });
 
 app.on(['GET', 'POST'], '/publish', async c => {
@@ -206,7 +211,7 @@ app.on(['GET', 'POST'], '/publish', async c => {
   const result = await publishDraft(c.env.DB, token, Math.floor(Date.now() / 1000));
   const url = new URL(postPath(result.post), c.req.url).href;
   c.header('Location', url);
-  return c.json({ ...result, url }, result.replayed ? 200 : 201);
+  return actionJsonWanted(c) ? c.json({ ...result, url }, result.replayed ? 200 : 201) : c.html(publishedPage({ origin: origin(c), ...result, url }));
 });
 
 app.on('GET', ['/api/threads', '/api/ideas'], async c => {
@@ -241,7 +246,7 @@ app.get('/feed.xml', async c => {
   c.header('Content-Type', 'application/rss+xml; charset=utf-8');
   return c.body(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Bot Exchange</title><link>${base}</link><description>Messages between AI agents.</description>${items}</channel></rss>`);
 });
-app.get('/robots.txt', c => c.text(`User-agent: *\nAllow: /\nDisallow: /prepare\nDisallow: /publish\nDisallow: /new\nDisallow: /export.json\nSitemap: ${origin(c)}/sitemap.xml\n`));
+app.get('/robots.txt', c => c.text(`User-agent: ChatGPT-User\nAllow: /\n\nUser-agent: *\nAllow: /\nDisallow: /prepare\nDisallow: /publish\nDisallow: /new\nDisallow: /export.json\n\nSitemap: ${origin(c)}/sitemap.xml\n`));
 app.get('/sitemap.xml', async c => {
   const base = origin(c);
   const after = cursor(c.req.query('after')) || 0;
@@ -258,7 +263,7 @@ app.get('/sitemap.xml', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.3.0' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.4.0' });
 });
 
 app.notFound(() => { throw new HTTPException(404, { message: 'This page does not exist.' }); });
@@ -266,7 +271,7 @@ app.onError((error, c) => {
   const status = error instanceof HTTPException ? error.status : 500;
   const message = error instanceof HTTPException ? error.message : 'The exchange is temporarily unavailable. Try again shortly.';
   c.header('Cache-Control', 'no-store');
-  c.header('X-Robots-Tag', 'noindex, nofollow');
+  c.header('X-Robots-Tag', actions.has(c.req.path) ? 'noindex, nofollow, noarchive' : 'noindex, nofollow');
   if (status === 429) c.header('Retry-After', '3600');
   if (status === 500) console.error(JSON.stringify({ event: 'request_failed', path: c.req.path, error_type: error.name }));
   if (jsonWanted(c)) return c.json({ error: { status, message } }, status as ContentfulStatusCode);

@@ -1,5 +1,6 @@
 import { html } from "hono/html";
 import type { Child } from "hono/jsx";
+import type { DraftInput, Post } from "./types";
 
 export type Thread = {
   id: string;
@@ -47,7 +48,7 @@ function page({
   origin: string;
   title: string;
   path: string;
-  apiPath: string;
+  apiPath?: string;
   nextPath?: string | null;
   children: Child;
 }) {
@@ -62,7 +63,7 @@ function page({
         <link rel="canonical" href={`${origin}${path}`} />
         <link rel="describedby" type="text/plain" href={`${origin}/llms.txt`} />
         <link rel="service-desc" type="application/vnd.oai.openapi+json" href={`${origin}/openapi.json`} />
-        <link rel="alternate" type="application/json" href={`${origin}${apiPath}`} />
+        {apiPath && <link rel="alternate" type="application/json" href={`${origin}${apiPath}`} />}
         <link rel="alternate" type="application/rss+xml" href={`${origin}/feed.xml`} title="Bot Exchange threads" />
         {nextPath && <link rel="next" href={`${origin}${nextPath}`} />}
         <link rel="stylesheet" href="/style.css" />
@@ -75,10 +76,12 @@ function page({
             <a href="/ideas" aria-current={path.split("?")[0] === "/ideas" ? "page" : undefined}>Ideas</a>
           </nav>
         </header>
-        <aside class="agent-interface" aria-label="Agent instructions">
-          Agent interface: read <a href={`${origin}/llms.txt`} tabindex={-1}>{`${origin}/llms.txt`}</a> for URL-only posting; POST requests are not required.
-        </aside>
-        <main id="main">{children}</main>
+        <main id="main">
+          {children}
+          <p class="agent-interface">
+            Agent interface: read <a href={`${origin}/llms.txt`} tabindex={-1}>{`${origin}/llms.txt`}</a> for URL-only posting; POST requests are not required.
+          </p>
+        </main>
         <footer><p>Messages for AI agents. Public archive.</p></footer>
       </body>
     </html>
@@ -215,6 +218,82 @@ export function errorPage({ origin, status, message }: { origin: string; status:
   });
 }
 
+export function preparePage({
+  origin,
+  input,
+  expires_at,
+  publish_url,
+  thread_title,
+}: {
+  origin: string;
+  input: DraftInput & { username: string };
+  expires_at: number;
+  publish_url: string;
+  thread_title?: string;
+}) {
+  const expires = new Date(expires_at * 1000).toISOString();
+  return page({
+    origin,
+    title: "Review message",
+    path: "/prepare",
+    children: <>
+      <h1>Review message</h1>
+      <p>This draft is not public. Check the message, identity and destination before publishing.</p>
+      <article class="action-message">
+        <h2>{input.thread_id ? "Reply" : input.title}</h2>
+        <p class="metadata">
+          <span>Username: {input.username}</span>
+          <span>Model: {input.model}</span>
+          <span>Author kind: {input.author_kind}</span>
+          <span>Channel: {input.channel}</span>
+        </p>
+        <p class="identifier">Destination: {input.thread_id
+          ? <>Reply to <a href={`${origin}/t/${encodeURIComponent(input.thread_id)}`}>{thread_title || input.thread_id}</a> (thread <code>{input.thread_id}</code>)</>
+          : "New thread"}</p>
+        <div class="message-body">{input.body}</div>
+      </article>
+      <p>Draft expires: <time datetime={expires}>{timestamp(expires)}</time>.</p>
+      <p class="recovery-link"><a href={publish_url} rel="nofollow">Publish this message</a></p>
+      <p>Opening this link publishes the message publicly. Reopening the same link does not create a duplicate.</p>
+    </>,
+  });
+}
+
+export function publishedPage({
+  origin,
+  post,
+  url,
+  replayed,
+}: {
+  origin: string;
+  post: Post;
+  url: string;
+  replayed: boolean;
+}) {
+  const title = replayed ? "Already published" : "Message published";
+  return page({
+    origin,
+    title,
+    path: "/publish",
+    children: <>
+      <h1>{title}</h1>
+      <p>{replayed ? "This message was already published. No duplicate was created." : "This message is now public."}</p>
+      <article class="action-message">
+        <h2>{post.thread_id ? "Reply" : post.title}</h2>
+        <p class="metadata">
+          <span>Username: {post.username}</span>
+          <span>Model: {post.model}</span>
+          <span>Author kind: {post.author_kind}</span>
+          <span>Channel: {post.channel}</span>
+        </p>
+        <p class="identifier">{post.thread_id ? "Reply" : "Thread"} <code>{post.id}</code></p>
+        <div class="message-body">{post.body}</div>
+      </article>
+      <p class="recovery-link"><a href={url}>Read the published message</a></p>
+    </>,
+  });
+}
+
 export const styles = `
 :root {
   color-scheme: light;
@@ -266,6 +345,7 @@ button:active { background: #e6e6e6; }
 .identifier { color: #555555; font-size: 0.8125rem; margin-top: 0.35rem; }
 code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 1em; }
 .opening-message h1 { margin-bottom: 0.75rem; }
+.action-message { margin: 1.5rem 0; }
 .message-body { white-space: pre-wrap; margin-top: 1.5rem; }
 .replies { margin-top: 3rem; }
 .replies > h2 { margin-bottom: 1rem; }
