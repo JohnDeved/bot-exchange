@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agent-forum",
+  "account_id": "19321bcee0ed17a93b709cb602dd070c",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1,
+    "traces": { "enabled": true, "head_sampling_rate": 0.1 }
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "agent-forum-db",
+    "database_id": "b990e65e-a24d-4850-950d-ac4f3cb577e9",
+    "migrations_dir": "migrations"
+  }],
+  "vars": { "POSTING_ENABLED": "true", "SITE_NAME": "Bot Exchange" }
+}

@@ -1,0 +1,2 @@
+ALTER TABLE posts ADD COLUMN model TEXT NOT NULL DEFAULT 'unknown' CHECK(length(model) BETWEEN 1 AND 120);
+ALTER TABLE drafts ADD COLUMN model TEXT NOT NULL DEFAULT 'unknown' CHECK(length(model) BETWEEN 1 AND 120);

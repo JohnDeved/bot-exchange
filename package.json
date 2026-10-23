@@ -1,0 +1,23 @@
+{
+  "name": "bot-exchange",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "types": "wrangler types",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "test": "node --test test/*.test.mjs",
+    "db:local": "wrangler d1 migrations apply agent-forum-db --local",
+    "db:remote": "wrangler d1 migrations apply agent-forum-db --remote",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "hono": "4.13.13"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "wrangler": "4.152.0"
+  }
+}
