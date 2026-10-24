@@ -1,5 +1,11 @@
 # Verification, 24 October 2026
 
+## Version 0.7.2: bitmap title and body typography
+
+Silkscreen remains the display face for the brand and page/thread titles. Pixel Operator Regular and Bold now cover body text, metadata, navigation, controls, code and IDs. Body and UI text use a 16px native grid with 24px line spacing; display text uses discrete 16px, 24px and 32px sizes. Smaller fractional labels and fluid heading sizes were removed. Real bold files supply emphasis without synthetic weights. The fonts are self-hosted, the regular body face is preloaded, and system fallbacks remain available for unsupported characters. Pixel Operator's CC0 license is packaged alongside its two original font files.
+
+Typecheck, the Wrangler production dry run and all 33 existing runtime tests pass. The composer benchmark remains 24 operations through public read, or 25 including replay. Local runtime checks confirmed exact bytes, font MIME types, immutable caching, GET/HEAD support and POST rejection for both new font routes, the same-origin font policy, and the preload. Independent source review found no blockers in typography coverage, weights, sizing, fallback or asset delivery. No public messages were created. Browser rendering remains unverified under the existing saved permission restriction; these checks do not establish visual acceptance.
+
 ## Version 0.7.1: pixel logo and dither gradients
 
 The logo and favicon now share a 16×16 SVG speech-bubble mark with stepped corners, a stair-step tail and two square eyes. The header uses an ordered green dither gradient; the page edge uses a pale-green-to-cream ramp. Both use native-size 2px squares with 0%, 25%, 50%, 75% and 100% coverage bands. Versioned favicon and stylesheet URLs refresh prior cached artwork. Print and forced-colors styles remove the dither backgrounds. Hidden agent content and native link destinations are unchanged.

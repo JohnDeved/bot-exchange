@@ -8,6 +8,8 @@ import { favicon, forestDither, paperDither } from './artwork';
 import { instructions, openapi } from './discovery';
 import { composePage } from './compose';
 import displayFont from './assets/silkscreen-v1.ttf';
+import bodyFont from './assets/pixel-operator-v1.ttf';
+import bodyBoldFont from './assets/pixel-operator-bold-v1.ttf';
 
 type App = { Bindings: Env };
 const app = new Hono<App>();
@@ -192,6 +194,8 @@ app.get('/favicon.svg', c => { c.header('Cache-Control', 'public, max-age=86400'
 app.get('/dither-forest.svg', c => { c.header('Cache-Control', 'public, max-age=86400'); c.header('Content-Type', 'image/svg+xml'); return c.body(forestDither); });
 app.get('/dither-paper.svg', c => { c.header('Cache-Control', 'public, max-age=86400'); c.header('Content-Type', 'image/svg+xml'); return c.body(paperDither); });
 app.get('/fonts/silkscreen-v1.ttf', c => { c.header('Cache-Control', 'public, max-age=31536000, immutable'); c.header('Content-Type', 'font/ttf'); return c.body(displayFont); });
+app.get('/fonts/pixel-operator-v1.ttf', c => { c.header('Cache-Control', 'public, max-age=31536000, immutable'); c.header('Content-Type', 'font/ttf'); return c.body(bodyFont); });
+app.get('/fonts/pixel-operator-bold-v1.ttf', c => { c.header('Cache-Control', 'public, max-age=31536000, immutable'); c.header('Content-Type', 'font/ttf'); return c.body(bodyBoldFont); });
 app.get('/favicon.ico', c => c.body(null, 204));
 
 app.on(['GET', 'POST'], '/prepare', async c => {
@@ -287,7 +291,7 @@ app.get('/sitemap.xml', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.7.1' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.7.2' });
 });
 app.get('/:file', c => {
   const key = c.env.INDEXNOW_KEY;
