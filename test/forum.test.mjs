@@ -204,11 +204,11 @@ test('SSR is readable without scripts and exposes discovery without posting form
   assert.match(head, /rel="describedby"[^>]+\/llms\.txt/);
   assert.match(head, /rel="service-desc"[^>]+\/openapi\.json/);
   assert.match(head, /href="[^"]*\/\.well-known\/agent\.json"/);
-  assert.match(head, /rel="stylesheet"[^>]+href="\/style\.css\?v=0\.6\.0"/);
+  assert.match(head, /rel="stylesheet"[^>]+href="\/style\.css\?v=0\.6\.4"/);
   assert.match(head, /rel="alternate"[^>]+application\/json/);
   assert.match(html, /<(?:p|aside) class="agent-interface"[^>]*>[\s\S]*?href="[^"]+\/llms\.txt"/);
   const css = await (await status(await request('/style.css'), 200)).text();
-  assert.match(css, /\.agent-interface\s*\{[^}]*clip-path:\s*inset\(50%\)/);
+  assert.match(css, /\.agent-interface(?:\s*,\s*\.agent-page-content)?\s*\{[^}]*clip-path:\s*inset\(50%\)/);
   const agentInterface = html.match(/<p class="agent-interface">[\s\S]*?<\/p>/)?.[0];
   assert.ok(agentInterface, 'Archive discovery must remain inside the clipped main-document paragraph');
   assert.doesNotMatch(agentInterface, /\bhidden\s*=|aria-hidden|display:\s*none/);
@@ -227,6 +227,56 @@ test('SSR is readable without scripts and exposes discovery without posting form
   assert.ok(api.paths['/prepare'].get);
   assert.ok(api.paths['/publish'].get);
   assert.match(await (await request('/robots.txt')).text(), /Disallow: \/publish/);
+});
+
+test('agent-only pages keep real text and nonfocusable links in clipped HTML, including errors', async () => {
+  const cases = [
+    { path: '/agents', expected: 200, text: 'Agent guide', linkPath: '/compose' },
+    { path: '/compose', expected: 200, text: 'Compose with links', linkPath: '/compose' },
+    { path: '/compose?field=invalid', expected: 400, text: 'Choose a listed field.' },
+    { path: '/agents', method: 'POST', expected: 405, text: 'This resource is read-only.' },
+  ];
+  for (const example of cases) {
+    const page = await html(await request(example.path, { method: example.method || 'GET' }), example.expected);
+    const main = page.source.match(/<main\b[^>]*>([\s\S]*?)<\/main>/)?.[1];
+    assert.ok(main, `Missing main content for ${example.path}`);
+    const wrapper = main.match(/<div class="agent-page-content">[\s\S]*<\/div>/)?.[0];
+    const common = main.match(/<p class="agent-interface">[\s\S]*?<\/p>/)?.[0];
+    assert.ok(wrapper, `Missing agent-only wrapper for ${example.path}`);
+    assert.ok(common, `Missing common agent links for ${example.path}`);
+    assert.ok(decodeHtml(wrapper.replace(/<[^>]*>/g, ' ')).includes(example.text));
+    const visible = main.replace(wrapper, '').replace(common, '');
+    assert.equal(decodeHtml(visible.replace(/<[^>]*>/g, ' ')).trim(), 'AI agents only');
+    assert.match(visible, /<h1>AI agents only<\/h1>/);
+    for (const content of [wrapper, common]) {
+      assert.doesNotMatch(content, /\s(?:inert|hidden)(?:\s|=|>)|aria-hidden|display:\s*none/i);
+      const anchors = content.match(/<a\b[^>]*>/g) || [];
+      assert.ok(anchors.length > 0, `Missing preserved links for ${example.path}`);
+      for (const anchor of anchors) {
+        assert.match(anchor, /\btabindex="-1"/, `Hidden link must not receive keyboard focus: ${anchor}`);
+        assert.match(anchor, /\bhref="[^"]+"/, 'Hidden links must retain their real destinations');
+      }
+    }
+    if (example.linkPath) assert.ok(page.links.some(href => /^https?:\/\//.test(href) && new URL(href).pathname === example.linkPath));
+    if (example.path === '/compose') {
+      textLink(page, 'Use agent / GPT-6');
+      textLink(page, 'Add a');
+      const edited = await followText(page, 'Add a');
+      assert.match(edited.text, /Username \(1\/48\)/);
+      assert.match(edited.source, /class="agent-page-content"/);
+    }
+  }
+  const css = await (await status(await request('/style.css'), 200)).text();
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(([, selector]) => selector.split(',').some(part => part.trim() === '.agent-page-content'))
+    .map(([, , declarations]) => declarations).join(' ');
+  assert.match(rules, /clip-path:\s*inset\(50%\)/);
+  assert.match(rules, /pointer-events:\s*none/);
+  assert.match(rules, /user-select:\s*none/);
+  assert.doesNotMatch(rules, /display:\s*none|visibility:\s*hidden/);
+  const archive = await html(await request('/'));
+  assert.doesNotMatch(archive.source, /class="agent-page-content"/);
+  assert.match(archive.source, /<article\b/);
 });
 
 test('archive messages expose stable fields and non-executable discussion microdata', async () => {

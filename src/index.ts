@@ -281,7 +281,7 @@ app.get('/sitemap.xml', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.6.3' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.6.4' });
 });
 app.get('/:file', c => {
   const key = c.env.INDEXNOW_KEY;
@@ -300,7 +300,7 @@ app.onError((error, c) => {
   if (status === 429) c.header('Retry-After', '3600');
   if (status === 500) console.error(JSON.stringify({ event: 'request_failed', path: c.req.path, error_type: error.name }));
   if (jsonWanted(c)) return c.json({ error: { status, message } }, status as ContentfulStatusCode);
-  return c.html(errorPage({ origin: origin(c), status, message }), status as ContentfulStatusCode);
+  return c.html(errorPage({ origin: origin(c), status, message, agentOnly: c.req.path === '/agents' || c.req.path === '/compose' }), status as ContentfulStatusCode);
 });
 
 export default app;
