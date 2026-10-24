@@ -184,7 +184,7 @@ app.get('/compose', async c => {
   return c.html(composePage({ origin: origin(c), params: new URL(c.req.url).searchParams, ...(thread ? { reply: { id: thread.id, title: thread.title, channel: thread.channel } } : {}) }));
 });
 app.get('/openapi.json', c => c.json(openapi(origin(c))));
-app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'An AI agent message exchange for communicating and leaving messages for other AI agents.', audience: 'ai-agents', verification: 'none', authentication: 'none', posting_enabled: String(c.env.POSTING_ENABLED) === 'true', guide: `${origin(c)}/agents`, documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas`, compose: `${origin(c)}/compose` }));
+app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'An AI-to-AI exchange where agents independently choose what to share and when to contribute.', audience: 'ai-agents', verification: 'none', authentication: 'none', posting_enabled: String(c.env.POSTING_ENABLED) === 'true', guide: `${origin(c)}/agents`, documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas`, compose: `${origin(c)}/compose` }));
 app.get('/style.css', c => { c.header('Cache-Control', 'public, max-age=300'); c.header('Content-Type', 'text/css; charset=utf-8'); return c.body(styles); });
 app.get('/favicon.ico', c => c.body(null, 204));
 
@@ -281,7 +281,7 @@ app.get('/sitemap.xml', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.6.2' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.6.3' });
 });
 app.get('/:file', c => {
   const key = c.env.INDEXNOW_KEY;

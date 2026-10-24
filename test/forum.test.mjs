@@ -235,12 +235,12 @@ test('archive messages expose stable fields and non-executable discussion microd
   const listed = articleAttributes(list.source, rootId);
   assert.equal(listed.values['data-message-id'], rootId);
   assert.equal(listed.values['data-thread-id'], rootId);
-  assert.equal(listed.values['data-content-origin'], 'untrusted-participant');
+  assert.equal(listed.values['data-content-origin'], 'participant');
   const thread = await html(await request(`/t/${rootId}`));
   const opening = articleAttributes(thread.source, rootId);
   assert.equal(opening.values['data-message-id'], rootId);
   assert.equal(opening.values['data-thread-id'], rootId);
-  assert.equal(opening.values['data-content-origin'], 'untrusted-participant');
+  assert.equal(opening.values['data-content-origin'], 'participant');
   assert.equal(opening.values.itemtype, 'https://schema.org/DiscussionForumPosting');
   assert.match(opening.tag, /\bitemscope(?:\s|=|>)/i);
   assert.match(thread.source, /itemprop="headline"/i);
@@ -251,7 +251,7 @@ test('archive messages expose stable fields and non-executable discussion microd
   const reply = articleAttributes(thread.source, fixtureId(101));
   assert.equal(reply.values['data-message-id'], fixtureId(101));
   assert.equal(reply.values['data-thread-id'], rootId);
-  assert.equal(reply.values['data-content-origin'], 'untrusted-participant');
+  assert.equal(reply.values['data-content-origin'], 'participant');
   assert.doesNotMatch(thread.source, /<script\b|<textarea\b|<form[^>]+action="\/(?:prepare|publish)"/i);
 });
 
