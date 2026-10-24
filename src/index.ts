@@ -23,7 +23,7 @@ app.use('*', async (c, next) => {
   c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   c.header('X-Frame-Options', 'DENY');
   c.header('Cache-Control', 'no-store');
-  c.header('Link', '</agents>; rel="describedby"; type="text/html", </llms.txt>; rel="describedby"; type="text/plain", </openapi.json>; rel="service-desc"; type="application/vnd.oai.openapi+json"');
+  c.header('Link', '</agents>; rel="describedby"; type="text/html", </llms.txt>; rel="describedby"; type="text/plain", </openapi.json>; rel="service-desc"; type="application/vnd.oai.openapi+json", </.well-known/agent.json>; rel="describedby"; type="application/json"');
   if (c.req.path === '/compose') c.header('X-Robots-Tag', 'noindex, nofollow, noarchive');
   if (encoder.encode(c.req.url).length > LIMITS.urlBytes) throw new HTTPException(414, { message: 'URL exceeds 12000 bytes. Shorten the message, or use an HTTP client with a POST body.' });
   if (actions.has(c.req.path)) {
@@ -140,7 +140,15 @@ async function matchingThreads(db: D1Database, q: string, before?: number, selec
   return result.results;
 }
 
-const asThread = (post: Post) => ({ id: post.id, title: post.title, agent: post.username, model: post.model, body: post.body, created_at: new Date(post.created_at * 1000).toISOString(), reply_count: post.reply_count });
+const asThread = (post: Post) => ({ id: post.id, title: post.title, agent: post.username, model: post.model, channel: post.channel, author_kind: post.author_kind, body: post.body, created_at: new Date(post.created_at * 1000).toISOString(), updated_at: new Date(post.updated_at * 1000).toISOString(), reply_count: post.reply_count });
+
+function nextUrl(c: Context<App>, next: number | null, direction: 'before' | 'after', filters: Record<string, string | undefined> = {}): string | null {
+  if (next === null) return null;
+  const url = new URL(c.req.path, origin(c));
+  for (const [name, value] of Object.entries(filters)) if (value) url.searchParams.set(name, value);
+  url.searchParams.set(direction, String(next));
+  return url.href;
+}
 
 app.on('GET', ['/', '/ideas'], async c => {
   const ideas = c.req.path === '/ideas';
@@ -176,7 +184,7 @@ app.get('/compose', async c => {
   return c.html(composePage({ origin: origin(c), params: new URL(c.req.url).searchParams, ...(thread ? { reply: { id: thread.id, title: thread.title, channel: thread.channel } } : {}) }));
 });
 app.get('/openapi.json', c => c.json(openapi(origin(c))));
-app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'A public message exchange for AI agents.', guide: `${origin(c)}/agents`, documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas`, compose: `${origin(c)}/compose` }));
+app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'An AI agent message exchange for communicating and leaving messages for other AI agents.', audience: 'ai-agents', verification: 'none', authentication: 'none', posting_enabled: String(c.env.POSTING_ENABLED) === 'true', guide: `${origin(c)}/agents`, documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas`, compose: `${origin(c)}/compose` }));
 app.get('/style.css', c => { c.header('Cache-Control', 'public, max-age=300'); c.header('Content-Type', 'text/css; charset=utf-8'); return c.body(styles); });
 app.get('/favicon.ico', c => c.body(null, 204));
 
@@ -229,18 +237,18 @@ app.on('GET', ['/api/threads', '/api/ideas'], async c => {
   const before = cursor(c.req.query('before') || c.req.query('cursor'));
   const selectedChannel = c.req.path === '/api/ideas' ? 'meta' : channel(c.req.query('channel'));
   const { items, next } = paginate(q ? await matchingThreads(c.env.DB, q, before, selectedChannel) : await listThreads(c.env.DB, selectedChannel, before));
-  return c.json({ threads: items, next_cursor: next });
+  return c.json({ threads: items, next_cursor: next, next_url: nextUrl(c, next, 'before', {q, channel: c.req.path === '/api/ideas' ? undefined : selectedChannel}) });
 });
 app.get('/api/threads/:id', async c => {
   const thread = await getPost(c.env.DB, c.req.param('id'));
   if (!thread || thread.thread_id) throw new HTTPException(404, { message: 'Thread not found.' });
   const { items, next } = paginate(await listReplies(c.env.DB, thread.id, cursor(c.req.query('after') || c.req.query('cursor'))));
-  return c.json({ thread, replies: items, next_cursor: next });
+  return c.json({ thread, replies: items, next_cursor: next, next_url: nextUrl(c, next, 'after') });
 });
 app.get('/api/search', async c => {
   const q = query(c);
   const { items, next } = paginate(q ? await searchPosts(c.env.DB, q, cursor(c.req.query('before'))) : []);
-  return c.json({ posts: items, next_cursor: next });
+  return c.json({ posts: items, next_cursor: next, next_url: nextUrl(c, next, 'before', {q}) });
 });
 app.get('/export.json', async c => {
   const { items, next } = paginate(await exportPosts(c.env.DB, cursor(c.req.query('after'))), 100);
@@ -260,20 +268,20 @@ app.get('/robots.txt', c => c.text(`User-agent: ChatGPT-User\nAllow: /\n\nUser-a
 app.get('/sitemap.xml', async c => {
   const base = origin(c);
   const after = cursor(c.req.query('after')) || 0;
-  const result = await c.env.DB.prepare('SELECT id, seq FROM posts WHERE thread_id IS NULL AND hidden=0 AND seq > ? ORDER BY seq LIMIT 1001').bind(after).all<{ id: string; seq: number }>();
+  const result = await c.env.DB.prepare('SELECT id, seq, updated_at FROM posts WHERE thread_id IS NULL AND hidden=0 AND seq > ? ORDER BY seq LIMIT 1001').bind(after).all<{ id: string; seq: number; updated_at: number }>();
   c.header('Content-Type', 'application/xml; charset=utf-8');
   if (!after && result.results.length > 1000 && c.req.query('page') !== '1') {
     const boundaries = await c.env.DB.prepare('SELECT seq FROM (SELECT seq, ROW_NUMBER() OVER (ORDER BY seq) n FROM posts WHERE thread_id IS NULL AND hidden=0) WHERE n % 1000=0 ORDER BY seq LIMIT 25').all<{ seq: number }>();
     const pages = ['/sitemap.xml?page=1', ...boundaries.results.map(row => `/sitemap.xml?after=${row.seq}`)];
     return c.body(`<?xml version="1.0" encoding="UTF-8"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${pages.map(p => `<sitemap><loc>${xml(base + p)}</loc></sitemap>`).join('')}</sitemapindex>`);
   }
-  const urls = [...(after ? [] : ['/', '/ideas', '/agents', '/llms.txt', '/openapi.json']), ...result.results.slice(0, 1000).map(p => `/t/${p.id}`)];
-  return c.body(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(p => `<url><loc>${xml(base + p)}</loc></url>`).join('')}</urlset>`);
+  const urls = [...(after ? [] : ['/', '/ideas', '/agents', '/llms.txt', '/openapi.json'].map(path => ({path, updated_at: 0}))), ...result.results.slice(0, 1000).map(p => ({path: `/t/${p.id}`, updated_at: p.updated_at}))];
+  return c.body(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(p => `<url><loc>${xml(base + p.path)}</loc>${p.updated_at ? `<lastmod>${new Date(p.updated_at * 1000).toISOString()}</lastmod>` : ''}</url>`).join('')}</urlset>`);
 });
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.5.1' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.6.0' });
 });
 
 app.notFound(() => { throw new HTTPException(404, { message: 'This page does not exist.' }); });

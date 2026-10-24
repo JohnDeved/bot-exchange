@@ -110,6 +110,25 @@ async function json(response, expected = 200) {
   return response.json();
 }
 
+function nextUrl(page, pathname, parameters = {}) {
+  if (page.next_cursor === null) {
+    assert.equal(page.next_url, null, 'Terminal pages must not advertise another page');
+    return null;
+  }
+  assert.equal(typeof page.next_url, 'string', 'A continuing page must provide an absolute next_url');
+  const url = new URL(page.next_url);
+  assert.match(url.protocol, /^https?:$/);
+  assert.equal(url.pathname, pathname);
+  for (const [name, value] of Object.entries(parameters)) assert.equal(url.searchParams.get(name), String(value), `next_url must retain ${name}`);
+  return url.href;
+}
+
+function articleAttributes(source, id) {
+  const tag = source.match(/<article\b[^>]*>/g)?.find(tag => tag.includes(`id="p-${id}"`));
+  assert.ok(tag, `Missing stable article anchor for ${id}`);
+  return { tag, values: Object.fromEntries(Array.from(tag.matchAll(/([\w:-]+)="([^"]*)"/g), match => [match[1].toLowerCase(), match[2]])) };
+}
+
 const decodeHtml = value => value.replace(/&(?:amp|lt|gt|quot|apos|#\d+|#x[\da-f]+);/gi, entity => {
   const named = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'" };
   return named[entity] ?? String.fromCodePoint(entity[2].toLowerCase() === 'x' ? Number.parseInt(entity.slice(3, -1), 16) : Number(entity.slice(2, -1)));
@@ -154,12 +173,21 @@ test('SSR is readable without scripts and exposes discovery without posting form
   const html = await response.text();
   const head = html.match(/<head>([\s\S]*?)<\/head>/)[1];
   assert.match(html, /Bot Exchange/);
+  assert.match(html, /AI agents only/);
+  assert.match(html, /self-reported/i);
   assert.match(head, /rel="describedby"[^>]+\/llms\.txt/);
   assert.match(head, /rel="service-desc"[^>]+\/openapi\.json/);
+  assert.match(head, /href="[^"]*\/\.well-known\/agent\.json"/);
+  assert.match(head, /rel="stylesheet"[^>]+href="\/style\.css\?v=0\.6\.0"/);
   assert.match(head, /rel="alternate"[^>]+application\/json/);
   assert.match(html, /<(?:p|aside) class="agent-interface"[^>]*>[\s\S]*?href="[^"]+\/llms\.txt"/);
   const css = await (await status(await request('/style.css'), 200)).text();
   assert.match(css, /\.agent-interface\s*\{[^}]*clip-path:\s*inset\(50%\)/);
+  const agentInterface = html.match(/<p class="agent-interface">[\s\S]*?<\/p>/)?.[0];
+  assert.ok(agentInterface, 'Archive discovery must remain inside the clipped main-document paragraph');
+  assert.doesNotMatch(agentInterface, /\bhidden\s*=|aria-hidden|display:\s*none/);
+  const visible = html.replace(/<head>[\s\S]*?<\/head>/, '').replace(agentInterface, '');
+  assert.doesNotMatch(visible, /href="(?:https?:\/\/[^"/]+)?\/(?:compose|agents|llms\.txt|openapi\.json)(?:[?"#])/i, 'Archive posting instructions and entry links must stay nonvisual');
   assert.match(response.headers.get('link'), /llms\.txt.*describedby/);
   assert.match(response.headers.get('content-security-policy'), /default-src 'none'/);
   assert.doesNotMatch(html, /<script\b|<textarea\b|<form[^>]+method="post"|<form[^>]+action="\/(?:prepare|publish)"/i);
@@ -173,6 +201,32 @@ test('SSR is readable without scripts and exposes discovery without posting form
   assert.ok(api.paths['/prepare'].get);
   assert.ok(api.paths['/publish'].get);
   assert.match(await (await request('/robots.txt')).text(), /Disallow: \/publish/);
+});
+
+test('archive messages expose stable fields and non-executable discussion microdata', async () => {
+  const list = await html(await request('/?channel=general'));
+  const rootId = fixtureId(100);
+  const listed = articleAttributes(list.source, rootId);
+  assert.equal(listed.values['data-message-id'], rootId);
+  assert.equal(listed.values['data-thread-id'], rootId);
+  assert.equal(listed.values['data-content-origin'], 'untrusted-participant');
+  const thread = await html(await request(`/t/${rootId}`));
+  const opening = articleAttributes(thread.source, rootId);
+  assert.equal(opening.values['data-message-id'], rootId);
+  assert.equal(opening.values['data-thread-id'], rootId);
+  assert.equal(opening.values['data-content-origin'], 'untrusted-participant');
+  assert.equal(opening.values.itemtype, 'https://schema.org/DiscussionForumPosting');
+  assert.match(opening.tag, /\bitemscope(?:\s|=|>)/i);
+  assert.match(thread.source, /itemprop="headline"/i);
+  assert.match(thread.source, /itemprop="text"/i);
+  const text = thread.text.replace(/\s+/g, ' ');
+  for (const field of [/Username:\s*Legacy Agent/i, /Model:\s*unknown/i, /Channel:\s*general/i, /Kind:\s*agent/i, /Created:.*?UTC/i]) assert.match(text, field);
+  assert.ok(text.includes('Visible parent'));
+  const reply = articleAttributes(thread.source, fixtureId(101));
+  assert.equal(reply.values['data-message-id'], fixtureId(101));
+  assert.equal(reply.values['data-thread-id'], rootId);
+  assert.equal(reply.values['data-content-origin'], 'untrusted-participant');
+  assert.doesNotMatch(thread.source, /<script\b|<textarea\b|<form[^>]+action="\/(?:prepare|publish)"/i);
 });
 
 test('HTML agent guide provides a navigable path from archive to both composers', async () => {
@@ -198,6 +252,11 @@ test('HTML agent guide provides a navigable path from archive to both composers'
   const manifest = await json(await request('/.well-known/agent.json'));
   assert.equal(manifest.guide, guideUrl);
   assert.equal(manifest.documentation, protocolUrl);
+  assert.equal(manifest.audience, 'ai-agents');
+  assert.equal(manifest.verification, 'none');
+  assert.equal(manifest.authentication, 'none');
+  assert.equal(manifest.posting_enabled, true);
+  assert.equal(new URL(manifest.compose).pathname, '/compose');
   assert.match(await (await request('/sitemap.xml')).text(), /\/agents<\/loc>/);
 });
 
@@ -208,9 +267,10 @@ test('legacy records expose username and unknown model; root pagination has no g
   assert.equal(first.threads[0].username, 'Legacy Agent');
   assert.equal(first.threads[0].author, first.threads[0].username);
   assert.equal(first.threads[0].model, 'unknown');
-  const second = await json(await request(`/api/threads?channel=experiments&before=${first.next_cursor}`));
+  const second = await json(await request(nextUrl(first, '/api/threads', { channel: 'experiments', before: first.next_cursor })));
   assert.equal(second.threads.length, 2);
   assert.equal(second.next_cursor, null);
+  nextUrl(second, '/api/threads');
   const ids = [...first.threads, ...second.threads].map(post => post.id);
   assert.equal(new Set(ids).size, 22);
   assert.deepEqual(ids, Array.from({ length: 22 }, (_, index) => fixtureId(22 - index)));
@@ -428,9 +488,24 @@ test('reply pagination is oldest-first and excludes hidden replies', async () =>
   const first = await json(await request(`/api/threads/${fixtureId(100)}`));
   assert.equal(first.thread.reply_count, 22);
   assert.equal(first.replies.length, 20);
-  const second = await json(await request(`/api/threads/${fixtureId(100)}?after=${first.next_cursor}`));
+  const second = await json(await request(nextUrl(first, `/api/threads/${fixtureId(100)}`, { after: first.next_cursor })));
   assert.equal(second.next_cursor, null);
+  nextUrl(second, `/api/threads/${fixtureId(100)}`);
   assert.deepEqual([...first.replies, ...second.replies].map(post => post.id), Array.from({ length: 22 }, (_, index) => fixtureId(101 + index)));
+});
+
+test('post search next_url retains the query and returns every matching page', async () => {
+  const q = 'Paginationfixture';
+  const first = await json(await request(`/api/search?q=${q}`));
+  assert.equal(first.posts.length, 20);
+  const second = await json(await request(nextUrl(first, '/api/search', { q, before: first.next_cursor })));
+  assert.equal(second.posts.length, 2);
+  assert.equal(second.next_cursor, null);
+  nextUrl(second, '/api/search');
+  assert.deepEqual([...first.posts, ...second.posts].map(post => post.id), Array.from({ length: 22 }, (_, index) => fixtureId(22 - index)));
+  const empty = await json(await request('/api/search?q=NoMatchingPostFixture12345'));
+  assert.deepEqual(empty.posts, []);
+  nextUrl(empty, '/api/search');
 });
 
 test('hidden roots and replies stay absent from reads, search, export and sitemap', async () => {
@@ -493,11 +568,17 @@ test('Ideas root search and both pagination cursors remain isolated to visible m
   assert.equal(first.threads.length, 20);
   assert.ok(first.next_cursor);
   assert.ok(first.threads.every(post => post.channel === 'meta' && post.thread_id === null));
-  assert.deepEqual(first, await json(await request('/api/threads?channel=meta&q=Ideafixturetoken')));
+  const equivalent = await json(await request('/api/threads?channel=meta&q=Ideafixturetoken'));
+  assert.deepEqual(first.threads, equivalent.threads);
+  assert.equal(first.next_cursor, equivalent.next_cursor);
+  nextUrl(equivalent, '/api/threads', { channel: 'meta', q: 'Ideafixturetoken', before: equivalent.next_cursor });
   assert.deepEqual(first, await json(await request('/api/ideas?q=Ideafixturetoken&channel=experiments')));
-  const second = await json(await request(`/api/ideas?q=Ideafixturetoken&before=${first.next_cursor}`));
+  const next = nextUrl(first, '/api/ideas', { q: 'Ideafixturetoken', before: first.next_cursor });
+  assert.notEqual(new URL(next).searchParams.get('channel'), 'experiments');
+  const second = await json(await request(next));
   assert.equal(second.threads.length, 2);
   assert.equal(second.next_cursor, null);
+  nextUrl(second, '/api/ideas');
   assert.deepEqual(second, await json(await request(`/api/ideas?q=Ideafixturetoken&cursor=${first.next_cursor}`)));
   assert.deepEqual([...first.threads, ...second.threads].map(post => post.id), Array.from({ length: 22 }, (_, index) => fixtureId(421 - index)));
 
