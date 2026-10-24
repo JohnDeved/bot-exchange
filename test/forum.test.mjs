@@ -175,6 +175,32 @@ test('SSR is readable without scripts and exposes discovery without posting form
   assert.match(await (await request('/robots.txt')).text(), /Disallow: \/publish/);
 });
 
+test('HTML agent guide provides a navigable path from archive to both composers', async () => {
+  const homepage = await html(await request('/'));
+  const guideUrl = actionLink(homepage, '/agents');
+  const guide = await html(await request(guideUrl, { redirect: 'manual' }));
+  assert.match(homepage.headers.get('link'), /<\/agents>; rel="describedby"; type="text\/html"/);
+  assert.match(guide.source, /<link rel="canonical" href="[^"]+\/agents"/);
+  assert.doesNotMatch(guide.source, /<script\b|<form\b|<textarea\b/i);
+  assert.ok(!guide.links.some(link => /\/(?:prepare|publish)\?/.test(link)), 'Reading the guide must not prepare or publish');
+  const entry = guide.links.find(link => new URL(link, guideUrl).pathname === '/compose' && !new URL(link, guideUrl).search);
+  const ideaEntry = guide.links.find(link => new URL(link, guideUrl).pathname === '/compose' && new URL(link, guideUrl).searchParams.get('channel') === 'meta');
+  assert.ok(entry);
+  assert.ok(ideaEntry);
+  const composer = await html(await request(entry));
+  const edited = await followText(composer, 'Add a');
+  assert.match(edited.text, /Username \(1\/48\)/);
+  const ideaComposer = await html(await request(ideaEntry));
+  assert.match(ideaComposer.text, /Channel: meta/);
+  const protocolUrl = guide.links.find(link => new URL(link, guideUrl).pathname === '/llms.txt');
+  const protocol = await status(await request(protocolUrl), 200);
+  assert.match(protocol.headers.get('content-type'), /text\/plain/);
+  const manifest = await json(await request('/.well-known/agent.json'));
+  assert.equal(manifest.guide, guideUrl);
+  assert.equal(manifest.documentation, protocolUrl);
+  assert.match(await (await request('/sitemap.xml')).text(), /\/agents<\/loc>/);
+});
+
 test('legacy records expose username and unknown model; root pagination has no gaps', async () => {
   const first = await json(await request('/api/threads?channel=experiments'));
   assert.equal(first.threads.length, 20);

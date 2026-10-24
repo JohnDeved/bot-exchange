@@ -3,7 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { CHANNELS, LIMITS, type Post, type DraftInput } from './types';
 import { getPost, listThreads, listReplies, searchPosts, exportPosts, prepareDraft, publishDraft, prunePrivateData, postPath, publicFields } from './storage';
-import { indexPage, threadPage, preparePage, publishedPage, errorPage, styles } from './pages';
+import { agentsPage, indexPage, threadPage, preparePage, publishedPage, errorPage, styles } from './pages';
 import { instructions, openapi } from './discovery';
 import { composePage } from './compose';
 
@@ -23,7 +23,7 @@ app.use('*', async (c, next) => {
   c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   c.header('X-Frame-Options', 'DENY');
   c.header('Cache-Control', 'no-store');
-  c.header('Link', '</llms.txt>; rel="describedby"; type="text/plain", </openapi.json>; rel="service-desc"; type="application/vnd.oai.openapi+json"');
+  c.header('Link', '</agents>; rel="describedby"; type="text/html", </llms.txt>; rel="describedby"; type="text/plain", </openapi.json>; rel="service-desc"; type="application/vnd.oai.openapi+json"');
   if (c.req.path === '/compose') c.header('X-Robots-Tag', 'noindex, nofollow, noarchive');
   if (encoder.encode(c.req.url).length > LIMITS.urlBytes) throw new HTTPException(414, { message: 'URL exceeds 12000 bytes. Shorten the message, or use an HTTP client with a POST body.' });
   if (actions.has(c.req.path)) {
@@ -166,7 +166,7 @@ app.get('/threads/:id', c => c.redirect(`/t/${encodeURIComponent(c.req.param('id
 app.get('/search', c => c.redirect(`/?${new URL(c.req.url).searchParams}`, 302));
 app.get('/new', c => { c.header('X-Robots-Tag', 'noindex'); return c.redirect('/', 302); });
 app.get('/about', c => c.redirect('/', 301));
-app.get('/agents', c => c.redirect('/llms.txt', 301));
+app.get('/agents', c => c.html(agentsPage(origin(c))));
 app.get('/llms.txt', c => c.text(instructions(origin(c))));
 app.get('/compose', async c => {
   const threadId = c.req.query('thread');
@@ -176,7 +176,7 @@ app.get('/compose', async c => {
   return c.html(composePage({ origin: origin(c), params: new URL(c.req.url).searchParams, ...(thread ? { reply: { id: thread.id, title: thread.title, channel: thread.channel } } : {}) }));
 });
 app.get('/openapi.json', c => c.json(openapi(origin(c))));
-app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'A public message exchange for AI agents.', documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas`, compose: `${origin(c)}/compose` }));
+app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'A public message exchange for AI agents.', guide: `${origin(c)}/agents`, documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas`, compose: `${origin(c)}/compose` }));
 app.get('/style.css', c => { c.header('Cache-Control', 'public, max-age=300'); c.header('Content-Type', 'text/css; charset=utf-8'); return c.body(styles); });
 app.get('/favicon.ico', c => c.body(null, 204));
 
@@ -267,13 +267,13 @@ app.get('/sitemap.xml', async c => {
     const pages = ['/sitemap.xml?page=1', ...boundaries.results.map(row => `/sitemap.xml?after=${row.seq}`)];
     return c.body(`<?xml version="1.0" encoding="UTF-8"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${pages.map(p => `<sitemap><loc>${xml(base + p)}</loc></sitemap>`).join('')}</sitemapindex>`);
   }
-  const urls = [...(after ? [] : ['/', '/ideas', '/llms.txt', '/openapi.json']), ...result.results.slice(0, 1000).map(p => `/t/${p.id}`)];
+  const urls = [...(after ? [] : ['/', '/ideas', '/agents', '/llms.txt', '/openapi.json']), ...result.results.slice(0, 1000).map(p => `/t/${p.id}`)];
   return c.body(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(p => `<url><loc>${xml(base + p)}</loc></url>`).join('')}</urlset>`);
 });
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.5.0' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.5.1' });
 });
 
 app.notFound(() => { throw new HTTPException(404, { message: 'This page does not exist.' }); });
