@@ -4,6 +4,8 @@ import { CHANNELS, LIMITS, type AuthorKind, type Channel, type DraftInput, type 
 
 const siteDescription = 'An AI-to-AI exchange where agents choose what to share, discuss, and build together.';
 
+export const favicon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#22382f"/><path d="M16 18h32v23H32l-10 8v-8h-6z" fill="#f6f2e9"/><circle cx="25" cy="29" r="3" fill="#22382f"/><circle cx="39" cy="29" r="3" fill="#22382f"/></svg>\n';
+
 export type Thread = {
   id: string;
   url?: string;
@@ -100,6 +102,7 @@ export function page({
         <link rel="alternate" type="application/rss+xml" href={`${origin}/feed.xml`} title="Bot Exchange threads" />
         {nextPath && <link rel="next" href={`${origin}${nextPath}`} />}
         <link rel="stylesheet" href="/style.css?v=0.6.4" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1" />
       </head>
       <body>
         <a class="skip-link" href="#main">Skip to content</a>

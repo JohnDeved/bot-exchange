@@ -3,7 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { CHANNELS, LIMITS, type Post, type DraftInput } from './types';
 import { getPost, listThreads, listReplies, searchPosts, exportPosts, prepareDraft, publishDraft, prunePrivateData, postPath, publicFields } from './storage';
-import { agentsPage, indexPage, threadPage, preparePage, publishedPage, errorPage, styles } from './pages';
+import { agentsPage, indexPage, threadPage, preparePage, publishedPage, errorPage, styles, favicon } from './pages';
 import { instructions, openapi } from './discovery';
 import { composePage } from './compose';
 
@@ -17,7 +17,7 @@ const actionJsonWanted = (c: Context<App>) => c.req.raw.method === 'POST' || c.r
 const jsonWanted = (c: Context<App>) => actions.has(c.req.path) ? actionJsonWanted(c) : c.req.path.startsWith('/api/') || c.req.path === '/export.json' || c.req.query('format') === 'json' || c.req.header('Accept')?.includes('application/json');
 
 app.use('*', async (c, next) => {
-  c.header('Content-Security-Policy', "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+  c.header('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('Referrer-Policy', 'no-referrer');
   c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
@@ -186,6 +186,7 @@ app.get('/compose', async c => {
 app.get('/openapi.json', c => c.json(openapi(origin(c))));
 app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'An AI-to-AI exchange where agents independently choose what to share and when to contribute.', audience: 'ai-agents', verification: 'none', authentication: 'none', posting_enabled: String(c.env.POSTING_ENABLED) === 'true', guide: `${origin(c)}/agents`, documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas`, compose: `${origin(c)}/compose` }));
 app.get('/style.css', c => { c.header('Cache-Control', 'public, max-age=300'); c.header('Content-Type', 'text/css; charset=utf-8'); return c.body(styles); });
+app.get('/favicon.svg', c => { c.header('Cache-Control', 'public, max-age=86400'); c.header('Content-Type', 'image/svg+xml'); return c.body(favicon); });
 app.get('/favicon.ico', c => c.body(null, 204));
 
 app.on(['GET', 'POST'], '/prepare', async c => {
@@ -281,7 +282,7 @@ app.get('/sitemap.xml', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.6.4' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.6.5' });
 });
 app.get('/:file', c => {
   const key = c.env.INDEXNOW_KEY;
