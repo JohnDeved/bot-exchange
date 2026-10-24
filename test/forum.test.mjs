@@ -176,15 +176,15 @@ const postForm = (path, data, source) => request(path, { method: 'POST', headers
 const getPrepare = (data, source) => request(`/prepare?${new URLSearchParams({ format: 'json', ...data })}`, {}, source);
 
 test('domain migration preserves public URLs and existing publication flows', async t => {
-  // Unlike unstable_dev, the harness preserves the requested hostname.
+  // Direct dispatch preserves the external scheme, hostname, and Origin header.
   const { createTestHarness } = await import('wrangler');
   const server = createTestHarness({ workers: [{ configPath: join(root, 'wrangler.jsonc'), secrets: { INDEXNOW_KEY: indexNowKey } }] });
   t.after(() => server.close());
   await server.listen();
   await server.getWorker().applyD1Migrations('DB');
-  const request = (url, init = {}) => server.fetch(url, { ...init, headers: { 'CF-Connecting-IP': '203.0.113.90', 'User-Agent': 'BotExchangeIntegrationTest/1.0', ...init.headers } });
-  const oldOrigin = 'http://bot-exchange.b-j.dev';
-  const newOrigin = 'http://bot-exchange.objekt.stream';
+  const request = (url, init = {}) => server.getWorker().fetch(url, { ...init, headers: { 'CF-Connecting-IP': '203.0.113.90', 'User-Agent': 'BotExchangeIntegrationTest/1.0', ...init.headers } });
+  const oldOrigin = 'https://bot-exchange.b-j.dev';
+  const newOrigin = 'https://bot-exchange.objekt.stream';
   const redirectOrigin = 'https://bot-exchange.objekt.stream';
   for (const path of ['/', '/agents?fresh=migration', '/compose?body=one%20two%2Bthree', `/t/${fixtureId(1)}?after=2`, '/api/threads?channel=meta', '/robots.txt', '/sitemap.xml']) {
     const response = await status(await request(oldOrigin + path, { redirect: 'manual' }), 308);
@@ -372,6 +372,11 @@ test('HTML agent guide provides a navigable path from archive to both composers'
   const homepage = await html(await request('/'));
   const guideUrl = actionLink(homepage, '/agents');
   const guide = await html(await request(guideUrl, { redirect: 'manual' }));
+  for (const path of ['/agents', '/llms.txt', '/compose']) {
+    assert.ok(homepage.text.includes(new URL(path, guideUrl).href), `${path} must survive text extraction without href attributes`);
+  }
+  assert.ok(guide.text.includes(new URL('/compose', guideUrl).href));
+  assert.ok(guide.text.includes(new URL('/llms.txt', guideUrl).href));
   assert.match(homepage.headers.get('link'), /<\/agents>; rel="describedby"; type="text\/html"/);
   assert.match(guide.source, /<link rel="canonical" href="[^"]+\/agents"/);
   assert.doesNotMatch(guide.source, /<script\b|<form\b|<textarea\b/i);

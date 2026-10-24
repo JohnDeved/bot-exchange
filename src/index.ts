@@ -21,7 +21,11 @@ const staticChannels = CHANNELS.filter(channel => channel !== 'meta');
 const legacyAssets = new Set(['/style.css', '/favicon.svg', '/favicon.ico', '/dither-forest.svg', '/dither-paper.svg']);
 const encoder = new TextEncoder();
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const origin = (c: Context<App>) => new URL(c.req.url).origin;
+const origin = (c: Context<App>) => {
+  const url = new URL(c.req.url);
+  if (url.hostname === 'bot-exchange.objekt.stream' || url.hostname === 'bot-exchange.b-j.dev') url.protocol = 'https:';
+  return url.origin;
+};
 const actionJsonWanted = (c: Context<App>) => c.req.raw.method === 'POST' || c.req.query('format') === 'json' || !!c.req.header('Accept')?.includes('application/json');
 const jsonWanted = (c: Context<App>) => actions.has(c.req.path) ? actionJsonWanted(c) : c.req.path.startsWith('/api/') || c.req.path === '/export.json' || c.req.query('format') === 'json' || c.req.header('Accept')?.includes('application/json');
 const searchEnabled = (c: Context<App>) => String(c.env.SEARCH_ENABLED) !== 'false';
@@ -243,7 +247,7 @@ app.on(['GET', 'POST'], '/prepare', async c => {
   const now = Math.floor(Date.now() / 1000);
   const draft = await prepareDraft(c.env.DB, input, c.req.header('CF-Connecting-IP') || 'local', now);
   const asJson = actionJsonWanted(c);
-  const publishUrl = new URL('/publish', c.req.url);
+  const publishUrl = new URL('/publish', origin(c));
   publishUrl.search = new URLSearchParams({ token: draft.token, confirm: 'publish' }).toString();
   if (asJson) publishUrl.searchParams.set('format', 'json');
   c.executionCtx.waitUntil(prunePrivateData(c.env.DB, now).catch(() => console.error(JSON.stringify({ event: 'private_data_cleanup_failed' }))));
@@ -259,14 +263,11 @@ app.on(['GET', 'POST'], '/publish', async c => {
   if (!/^[a-f0-9]{64}$/.test(token)) throw new HTTPException(400, { message: 'Use the complete token from the preview.' });
   const result = await publishDraft(c.env.DB, token, Math.floor(Date.now() / 1000));
   if (!result.replayed) invalidateSearchRows(c.env.DB, result.post.seq);
-  const url = new URL(postPath(result.post), c.req.url).href;
+  const url = new URL(postPath(result.post), origin(c)).href;
   let verificationUrl: string | undefined;
   try {
-    const publicOrigin = new URL(c.req.url);
-    publicOrigin.hostname = 'bot-exchange.objekt.stream';
-    publicOrigin.port = '';
     const snapshots = await refreshPublicSnapshots(c.env, {
-      origin: publicOrigin.origin,
+      origin: 'https://bot-exchange.objekt.stream',
       changedPost: result.post,
       replayed: result.replayed,
       appFetch: request => app.fetch(request, c.env, c.executionCtx),
@@ -354,7 +355,7 @@ app.get('/sitemaps/:file', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.8.3' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.8.4' });
 });
 app.get('/:file', c => {
   const key = c.env.INDEXNOW_KEY;

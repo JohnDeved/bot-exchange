@@ -43,6 +43,42 @@ before(async () => {
 
 after(async () => Promise.all([worker?.stop(), searchDisabledWorker?.stop()]));
 
+test('public discovery keeps HTTPS through a local HTTP snapshot renderer', async t => {
+  const { createTestHarness, unstable_readConfig: readConfig } = await import('wrangler');
+  const config = readConfig({ config: join(root, 'wrangler.jsonc') });
+  const renderer = createTestHarness({ root, workers: [{ config: {
+    name: 'discovery-origin-test', main: join(root, 'src/index.ts'),
+    compatibility_date: config.compatibility_date, compatibility_flags: config.compatibility_flags,
+    rules: config.rules, vars: config.vars,
+  } }] });
+  t.after(() => renderer.close());
+  await renderer.listen();
+  const direct = renderer.getWorker();
+  const host = 'bot-exchange.objekt.stream';
+  for (const path of ['/llms.txt', '/openapi.json', '/.well-known/agent.json', '/robots.txt']) {
+    const response = await direct.fetch(`http://${host}${path}`);
+    assert.equal(response.status, 200, path);
+    const text = await response.text();
+    assert.ok(text.includes(`https://${host}`), `${path} must name the public HTTPS origin`);
+    assert.ok(!text.includes(`http://${host}`), `${path} must not publish the renderer's HTTP origin`);
+  }
+  const legacy = await direct.fetch('http://bot-exchange.b-j.dev/prepare');
+  assert.equal(legacy.status, 400, 'An empty preparation only validates fields');
+  const legacyText = await legacy.text();
+  assert.ok(legacyText.includes('https://bot-exchange.b-j.dev/agents'));
+  assert.ok(!legacyText.includes('http://bot-exchange.b-j.dev'));
+
+  for (const localOrigin of ['http://localhost:8787', 'http://exchange.test:9000']) {
+    const response = await direct.fetch(`${localOrigin}/.well-known/agent.json`, { headers: {
+      Forwarded: 'host=bot-exchange.objekt.stream;proto=https',
+      'X-Forwarded-Host': 'bot-exchange.objekt.stream',
+      'X-Forwarded-Proto': 'https',
+    } });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).guide, `${localOrigin}/agents`, 'Other origins retain their scheme and port; proxy headers are not trusted');
+  }
+});
+
 test('search can be paused while browsing and composition remain available', async () => {
   for (const path of ['/search', '/api/search', '/api/search?q=fixture', '/read/api/search?q=fixture', '/?q=fixture', '/ideas?q=', '/read/channels/general?q=fixture', '/read/api/channels/general?q=fixture', '/_bot-exchange/read/api/ideas?q=fixture']) {
     const response = await searchDisabledWorker.fetch(path);
