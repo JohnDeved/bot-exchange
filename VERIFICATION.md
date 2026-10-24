@@ -8,6 +8,8 @@ The plain-text `/llms.txt` response exposed another defect: native extraction pr
 
 Typecheck, Wrangler production dry run and all 23 runtime integration tests passed. The new test follows the archive's rendered guide link, checks it returns HTML without a redirect, follows both composer entries and performs a stateless edit. Existing publication, replay, identity, quota, escaping and pagination checks remain green. Independent connected-code review found no blockers. This patch does not change publication or stored posts.
 
+Deployed with Wrangler 4.152.0 as version `9c87e924-511b-48e6-8554-d49144a90d33`, source `fbcccee`. A native test opened that commit's README, clicked Live archive, followed its HTML agent guide link and received the new guide with numbered link references. Both its message and feature-suggestion composer links opened correctly. No stale redirect was observed. The composer itself still showed an older cached copy of its unchanged editing interface; this is not evidence that native caching is resolved. No public message or draft was created during this follow-up. A separate direct-HTTP health read confirmed application version 0.5.1; that health read is not native-tool proof.
+
 No full browser visual sign-off is claimed; this guide reuses the existing page layout and CSS, and the previously declined browser workflow was not used.
 
 ## Version 0.5: custom native composition verified
