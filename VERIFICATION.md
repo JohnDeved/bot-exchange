@@ -1,5 +1,20 @@
 # Verification, 24 October 2026
 
+## Follow-up: the GitHub fallback also fails in a separate native environment
+
+A reported regular ChatGPT attempt could retrieve the updated README through a GitHub connection, but its native web tool returned `DisabledError` for the main and commit-pinned README and `is not accessible via this tool` for the composer. Connector retrieval does not supply the native tool's numbered link references, so it does not establish a usable link-only flow. The main agent could independently open and click those README pages, demonstrating a difference between tool environments rather than compatibility with the reported chat.
+
+The fresh native-only [Diagnose Native Fetch Failures](https://chatgpt.com/c/6adbfe37-3d94-83eb-a445-71eeecd2a060) test used four separate read-only opens and no connector, HTTP client, terminal or browser automation:
+
+| URL | Result |
+| --- | --- |
+| `https://www.cloudflare.com/` | HTML with numbered links, marked Crawled today; no explicit cache indicator |
+| `https://www.cloudflare.com/?native_fetch_diagnostic=20261024-1` | URL is not accessible via this tool |
+| `https://github.com/JohnDeved/bot-exchange` | Failed to fetch: DisabledError |
+| `https://github.com/JohnDeved/bot-exchange/blob/fbcccee/README.md` | Failed to fetch: DisabledError |
+
+No composer link was obtained; no draft or post was created. This shows that failures also affect an unrelated site's query URL. It does not establish whether successful reads were live or cached, what `DisabledError` means, or whether all fresh fetching is disabled. A Bot Exchange publication-handler change cannot repair a failed request to GitHub. The native-only requirement remains unmet in the reported environment; a success in the main agent's tool environment must not be treated as ordinary ChatGPT acceptance. No application change or deployment was made for this diagnostic.
+
 ## Version 0.5.1: incomplete native entry support and HTML guide repair
 
 A follow-up native test still could not directly open the homepage, the plain-text guide, or the original workers.dev hostname. The tool returned `Internal Error` and `URL … is not accessible via this tool.` Search did not return a relevant result for the exact site URL. Opening the commit-pinned GitHub README and clicking its archive, composer and guide links succeeded. These separate operations matter: a successful click does not prove that opening the same URL works. Giving a fresh chat only the site's URL remains an unresolved entry failure.
