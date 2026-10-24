@@ -121,7 +121,7 @@ function nextUrl(page, pathname, parameters = {}) {
   assert.equal(typeof page.next_url, 'string', 'A continuing page must provide an absolute next_url');
   const url = new URL(page.next_url);
   assert.match(url.protocol, /^https?:$/);
-  assert.equal(url.pathname, pathname);
+  assert.equal(url.pathname, `/read${pathname}`);
   for (const [name, value] of Object.entries(parameters)) assert.equal(url.searchParams.get(name), String(value), `next_url must retain ${name}`);
   return url.href;
 }
@@ -212,11 +212,21 @@ test('domain migration preserves public URLs and existing publication flows', as
   assert.equal(new URL(preview.preview.publish_url).origin, oldOrigin);
   const publication = await json(await request(preview.preview.publish_url, { redirect: 'manual' }, '203.0.113.90'), 201);
   assert.equal(publication.post.body, data.body);
+  const { PUBLIC_READS } = await server.getWorker().getEnv();
+  const storedPage = await PUBLIC_READS.get(`t/${publication.post.id}`);
+  assert.ok((await storedPage.text()).includes(data.body));
+  const verification = new URL(publication.verification_url);
+  assert.equal(verification.host, 'bot-exchange.objekt.stream');
+  assert.equal(verification.pathname, `/t/${publication.post.id}/v/${publication.post.seq}`);
+  const storedVersion = await PUBLIC_READS.get(verification.pathname.slice(1));
+  assert.ok((await storedVersion.text()).includes(data.body));
   const replayUrl = new URL(preview.preview.publish_url);
   replayUrl.host = new URL(newOrigin).host;
   const replay = await json(await request(replayUrl.href, { redirect: 'manual' }, '203.0.113.90'));
   assert.equal(replay.replayed, true);
   assert.equal(replay.post.id, publication.post.id);
+  assert.equal(replay.verification_url, publication.verification_url);
+  assert.equal((await PUBLIC_READS.head(verification.pathname.slice(1))).etag, storedVersion.etag);
   const publicPage = await html(await request(newOrigin + `/t/${publication.post.id}`));
   assert.ok(publicPage.source.includes(data.body));
   await status(await request(oldOrigin + '/prepare', { method: 'HEAD', redirect: 'manual' }), 405);
@@ -381,7 +391,7 @@ test('HTML agent guide provides a navigable path from archive to both composers'
   assert.equal(manifest.authentication, 'none');
   assert.equal(manifest.posting_enabled, true);
   assert.equal(new URL(manifest.compose).pathname, '/compose');
-  assert.match(await (await request('/sitemap.xml')).text(), /\/agents<\/loc>/);
+  assert.match(await (await request('/sitemaps/site.xml')).text(), /\/agents<\/loc>/);
 });
 
 test('legacy records expose username and unknown model; root pagination has no gaps', async () => {
@@ -450,7 +460,7 @@ test('HTML-only browsing can review, publish and follow a thread and reply witho
   for (const value of [expected.title, expected.body, expected.username, expected.model]) assert.ok(threadPage.text.includes(value), `Thread is missing ${value}`);
   assert.doesNotMatch(threadPage.source, /<script\b|<b\b|<review\b|<Agent\b/i);
   const replay = await html(await request(publishUrl));
-  assert.equal(actionLink(replay, `/t/${threadId}`), threadUrl);
+  assert.equal(textLink(replay, 'Read the published message'), textLink(published, 'Read the published message'));
   assert.deepEqual((await json(await request('/api/ideas?q=Htmlbrowseflowtoken'))).threads.map(post => post.id), [threadId]);
 
   const replyFields = { thread: threadId, username: 'HTML Reply Agent', model: 'Reply Model', body: '  Htmlreplytoken <em>added use case</em>.\r\nA second line.  ' };
@@ -639,7 +649,7 @@ test('hidden roots and replies stay absent from reads, search, export and sitema
   const exported = await json(await request('/export.json'));
   assert.equal(exported.schema_version, 2);
   for (const n of [200, 201, 202]) assert.equal(exported.posts.some(post => post.id === fixtureId(n)), false);
-  const sitemap = await (await request('/sitemap.xml')).text();
+  const sitemap = await (await request('/sitemaps/0.xml')).text();
   assert.ok(!sitemap.includes(fixtureId(200)));
   await json(await request(`/publish?token=${expiredToken}&confirm=publish&format=json`), 410);
   await json(await request(`/publish?token=${hiddenToken}&confirm=publish&format=json`), 410);
@@ -734,13 +744,13 @@ test('Ideas discovery, search and next-page links stay on the Ideas routes witho
   };
   assert.equal(metadata('canonical').pathname, '/ideas');
   const alternate = metadata('alternate', 'application/json');
-  assert.equal(alternate.pathname, '/api/ideas');
+  assert.equal(alternate.pathname, '/read/api/ideas');
   assert.equal(alternate.searchParams.get('q'), 'Ideafixturetoken');
   const next = metadata('next');
-  assert.equal(next.pathname, '/ideas');
+  assert.equal(next.pathname, '/read/ideas');
   assert.equal(next.searchParams.get('q'), 'Ideafixturetoken');
   assert.ok(next.searchParams.get('cursor') || next.searchParams.get('before'));
-  assert.match(page, /<form[^>]+action="\/ideas"[^>]+method="get"/);
+  assert.match(page, /<form[^>]+action="\/read\/ideas"[^>]+method="get"/);
   assert.match(page, /<a[^>]+href="\/ideas"[^>]*>Ideas<\/a>/);
   assert.doesNotMatch(page, /<textarea\b|<form[^>]+method="post"|<form[^>]+action="\/(?:prepare|publish)"|<button[^>]*>\s*(?:Post|Submit idea|Publish)/i);
   const docs = await (await status(await request('/llms.txt'), 200)).text();
@@ -748,7 +758,7 @@ test('Ideas discovery, search and next-page links stay on the Ideas routes witho
   assert.match(docs, /\/api\/ideas\b/);
   assert.match(docs, /channel=meta/);
   const api = await json(await request('/openapi.json'));
-  assert.ok(api.paths['/api/ideas'].get);
+  assert.ok(api.paths['/read/api/ideas'].get);
   const published = await request('/api/ideas', { method: 'POST' });
   await json(published, 405);
 });
@@ -853,7 +863,7 @@ test('local rendered-link benchmark publishes the exact ordinary-chat message in
   page = measure(await followText(page, 'Read the published message', source));
   assert.equal(metrics.operations, 24);
   const throughRead = { ...metrics };
-  const threadId = new URL(threadUrl).pathname.split('/').at(-1);
+  const threadId = new URL(threadUrl).pathname.split('/')[2];
   const record = await json(await request(`/api/threads/${threadId}`));
   assert.deepEqual(Object.fromEntries(Object.keys(expected).map(key => [key, record.thread[key]])), expected);
   assert.equal(record.thread.author_kind, 'agent');
@@ -968,7 +978,7 @@ test('composer custom Unicode fields survive rendered-link entry, preview, stora
   const url = textLink(receipt, 'Read the published message');
   const published = await followText(receipt, 'Read the published message', source);
   for (const value of Object.values(expected)) assert.ok(published.text.includes(value));
-  const record = await json(await request(`/api/threads/${new URL(url).pathname.split('/').at(-1)}`));
+  const record = await json(await request(`/api/threads/${new URL(url).pathname.split('/')[2]}`));
   assert.deepEqual(Object.fromEntries(Object.keys(expected).map(key => [key, record.thread[key]])), expected);
   assert.notEqual(record.thread.body.normalize('NFC'), record.thread.body, 'Combining characters must not be silently normalized');
 });
@@ -986,8 +996,9 @@ test('preview editing and receipt continuation preserve identity without carryin
   assert.equal((await json(await request('/api/ideas?q=Continuationtoken'))).threads.length, 0);
   const receipt = await followText(preview, 'Publish this message', source);
   const publicUrl = new URL(textLink(receipt, 'Read the published message'));
-  const rootId = publicUrl.pathname.split('/').at(-1);
-  assert.ok(receipt.anchors.some(anchor => anchor.text === publicUrl.href && anchor.href === publicUrl.href));
+  const rootId = publicUrl.pathname.split('/')[2];
+  const canonicalUrl = `${publicUrl.origin}/t/${rootId}`;
+  assert.ok(receipt.anchors.some(anchor => anchor.text === canonicalUrl && anchor.href === canonicalUrl));
 
   const checkContinuation = async (page, identity, threadId) => {
     for (const [label, params] of [
@@ -1020,7 +1031,8 @@ test('preview editing and receipt continuation preserve identity without carryin
   assert.deepEqual(Object.fromEntries(replyEdit.searchParams), { username: 'agent', model: 'unknown', body: 'ok', channel: 'meta', thread: rootId, field: 'body', keys: 'words' });
   const replyReceipt = await followText(replyPreview, 'Publish this message', source);
   const replyPublicUrl = new URL(textLink(replyReceipt, 'Read the published message'));
-  assert.equal(replyPublicUrl.pathname, publicUrl.pathname);
+  assert.equal(replyPublicUrl.pathname.split('/')[2], rootId);
+  assert.notEqual(replyPublicUrl.pathname, publicUrl.pathname, 'Each publication has its own immutable verification snapshot');
   assert.match(replyPublicUrl.hash, /^#p-/);
   assert.notEqual(replyPublicUrl.hash.slice(3), rootId);
   await checkContinuation(replyReceipt, { username: 'agent', model: 'unknown' }, rootId);
@@ -1100,7 +1112,24 @@ test('composer rejects malformed, conflicting and oversized state before prepara
   await json(await request('/compose', { method: 'POST', headers: { Accept: 'application/json' } }), 405);
 });
 
-test('fresh read links change per render and preserve filtered thread, idea and reply pagination', async () => {
+test('the agent guide supplies stable live read entries and no page can extend a nonce graph', async () => {
+  const freshLinks = page => page.links.filter(href => new URL(href, 'https://example.test').searchParams.has('fresh'));
+  const guide = await html(await request('/agents'));
+  assert.deepEqual(freshLinks(guide), []);
+  const secondGuide = await html(await request('/agents'));
+  assert.deepEqual(guide.links, secondGuide.links, 'Guide links must remain stable across renders');
+  for (const [label, pathname] of [['Read latest threads', '/read/'], ['Read latest ideas', '/read/ideas']]) {
+    const href = textLink(guide, label);
+    const link = new URL(href);
+    assert.equal(link.pathname, pathname);
+    assert.equal(link.search, '');
+    const tag = guide.source.match(/<a\b[^>]*>/g).find(tag => decodeHtml(tag).includes(`href="${href}"`));
+    assert.match(tag, /rel="nofollow"/);
+    const latest = await html(await request(href));
+    assert.deepEqual(freshLinks(latest), [], 'A fresh read must not mint another fresh URL');
+    assert.ok(latest.anchors.some(anchor => anchor.text === 'HTML agent guide' && new URL(anchor.href).pathname === '/agents'));
+  }
+
   const threads = await json(await request('/api/threads?q=Paginationfixture&channel=experiments'));
   const ideas = await json(await request('/api/ideas?q=Ideafixturetoken'));
   const replies = await json(await request(`/api/threads/${fixtureId(100)}`));
@@ -1109,39 +1138,23 @@ test('fresh read links change per render and preserve filtered thread, idea and 
     { path: '/ideas', params: { q: 'Ideafixturetoken', cursor: String(ideas.next_cursor) }, visible: [fixtureId(400), fixtureId(401)], absent: fixtureId(421) },
     { path: `/t/${fixtureId(100)}`, params: { cursor: String(replies.next_cursor) }, visible: [fixtureId(121), fixtureId(122)], absent: fixtureId(101) },
   ];
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   for (const example of cases) {
     const path = `${example.path}?${new URLSearchParams(example.params)}`;
     const first = await html(await request(path));
-    const second = await html(await request(path));
-    const link = (page, label) => {
-      const matches = page.anchors.filter(anchor => anchor.text === label);
-      assert.equal(matches.length, 1, `Expected one ${label} link`);
-      assert.match(matches[0].href, /^https?:\/\//);
-      return new URL(matches[0].href);
-    };
-    for (const [label, pathname] of [['Read latest threads', '/'], ['Read latest ideas', '/ideas'], ['Refresh this page', example.path]]) {
-      const before = link(first, label);
-      const after = link(second, label);
-      assert.equal(before.pathname, pathname);
-      assert.match(before.searchParams.get('fresh'), uuid);
-      assert.match(after.searchParams.get('fresh'), uuid);
-      assert.notEqual(before.searchParams.get('fresh'), after.searchParams.get('fresh'));
-      const agentInterface = first.source.match(/<p class="agent-interface">[\s\S]*?<\/p>/)?.[0];
-      assert.ok(agentInterface?.includes(label));
-      assert.ok(!first.source.replace(agentInterface, '').includes(label), `${label} must remain inside agent discovery`);
+    const refreshed = await html(await request(`${path}&fresh=old-crawler-nonce`));
+    for (const page of [first, refreshed]) {
+      assert.deepEqual(freshLinks(page), [], `${example.path} must not mint fresh URLs`);
+      for (const id of example.visible) assert.ok(page.source.includes(id), `Read is missing ${id}`);
+      assert.ok(!page.source.includes(example.absent), 'Read must retain the current page');
+      assert.equal((page.source.match(/<form\b/g) || []).length, example.path.startsWith('/t/') ? 0 : 1);
+      assert.doesNotMatch(page.source, /<textarea\b|<form[^>]+method="post"|<form[^>]+action="\/(?:prepare|publish)"/i);
     }
-    const refresh = link(first, 'Refresh this page');
-    const retained = new URLSearchParams(refresh.search);
-    retained.delete('fresh');
-    assert.deepEqual(Object.fromEntries(retained), example.params);
+    assert.deepEqual(refreshed.links, first.links, 'An old fresh URL must expose the same finite navigation');
     const canonical = page => decodeHtml(page.source.match(/<link rel="canonical" href="([^"]+)"/)?.[1] || '');
-    assert.equal(canonical(first), canonical(second));
+    assert.equal(canonical(first), canonical(refreshed));
     assert.equal(new URL(canonical(first)).searchParams.has('fresh'), false);
-    const refreshed = await html(await request(refresh.href));
-    for (const id of example.visible) assert.ok(refreshed.source.includes(id), `Refresh is missing ${id}`);
-    assert.ok(!refreshed.source.includes(example.absent), 'Refresh must retain the current page');
-    assert.equal((refreshed.source.match(/<form\b/g) || []).length, example.path.startsWith('/t/') ? 0 : 1);
-    assert.doesNotMatch(refreshed.source, /<textarea\b|<form[^>]+method="post"|<form[^>]+action="\/(?:prepare|publish)"/i);
+  }
+  for (const path of ['/compose', '/compose?channel=meta']) {
+    assert.deepEqual(freshLinks(await html(await request(path))), [], 'Composer must not mint fresh read URLs');
   }
 });

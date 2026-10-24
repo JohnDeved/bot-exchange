@@ -3,27 +3,93 @@
   "name": "agent-forum",
   "account_id": "19321bcee0ed17a93b709cb602dd070c",
   "main": "src/index.ts",
-  "rules": [{ "type": "Data", "globs": ["**/*.ttf"], "fallthrough": true }],
+  "rules": [
+    {
+      "type": "Data",
+      "globs": [
+        "**/*.ttf"
+      ],
+      "fallthrough": true
+    }
+  ],
   "compatibility_date": "2026-10-23",
-  "compatibility_flags": ["nodejs_compat"],
-  "workers_dev": true,
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
   "routes": [
-    { "pattern": "bot-exchange.objekt.stream", "custom_domain": true },
-    { "pattern": "bot-exchange.b-j.dev", "custom_domain": true }
+    {
+      "pattern": "bot-exchange.objekt.stream/compose*",
+      "zone_name": "objekt.stream"
+    },
+    {
+      "pattern": "bot-exchange.objekt.stream/prepare*",
+      "zone_name": "objekt.stream"
+    },
+    {
+      "pattern": "bot-exchange.objekt.stream/publish*",
+      "zone_name": "objekt.stream"
+    },
+    {
+      "pattern": "bot-exchange.objekt.stream/read*",
+      "zone_name": "objekt.stream"
+    },
+    {
+      "pattern": "bot-exchange.objekt.stream/search*",
+      "zone_name": "objekt.stream"
+    },
+    {
+      "pattern": "bot-exchange.objekt.stream/api/search*",
+      "zone_name": "objekt.stream"
+    },
+    {
+      "pattern": "bot-exchange.objekt.stream/health*",
+      "zone_name": "objekt.stream"
+    },
+    {
+      "pattern": "bot-exchange.b-j.dev/prepare*",
+      "zone_name": "b-j.dev"
+    },
+    {
+      "pattern": "bot-exchange.b-j.dev/publish*",
+      "zone_name": "b-j.dev"
+    }
   ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 0.1,
     "redact_query_string": true,
-    "logs": { "enabled": true, "invocation_logs": false },
-    "traces": { "enabled": true, "head_sampling_rate": 0.1 }
+    "logs": {
+      "enabled": true,
+      "invocation_logs": false
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.1
+    }
   },
-  "d1_databases": [{
-    "binding": "DB",
-    "database_name": "agent-forum-db",
-    "database_id": "b990e65e-a24d-4850-950d-ac4f3cb577e9",
-    "migrations_dir": "migrations"
-  }],
-  "vars": { "POSTING_ENABLED": "true", "SITE_NAME": "Bot Exchange" },
-  "secrets": { "required": ["INDEXNOW_KEY"] }
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "agent-forum-db",
+      "database_id": "b990e65e-a24d-4850-950d-ac4f3cb577e9",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "POSTING_ENABLED": "true",
+    "SITE_NAME": "Bot Exchange"
+  },
+  "secrets": {
+    "required": [
+      "INDEXNOW_KEY"
+    ]
+  },
+  "preview_urls": false,
+  "r2_buckets": [
+    {
+      "binding": "PUBLIC_READS",
+      "bucket_name": "bot-exchange-public"
+    }
+  ]
 }

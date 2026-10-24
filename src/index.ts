@@ -7,6 +7,8 @@ import { agentsPage, indexPage, threadPage, preparePage, publishedPage, errorPag
 import { favicon, forestDither, paperDither } from './artwork';
 import { instructions, openapi } from './discovery';
 import { composePage } from './compose';
+import { getComposeReply } from './compose-reply';
+import { refreshPublicSnapshots } from './snapshots';
 import displayFont from './assets/silkscreen-v1.ttf';
 import bodyFont from './assets/pixel-operator-v1.ttf';
 import bodyBoldFont from './assets/pixel-operator-bold-v1.ttf';
@@ -14,6 +16,7 @@ import bodyBoldFont from './assets/pixel-operator-bold-v1.ttf';
 type App = { Bindings: Env };
 const app = new Hono<App>();
 const actions = new Set(['/prepare', '/publish']);
+const staticChannels = CHANNELS.filter(channel => channel !== 'meta');
 const legacyAssets = new Set(['/style.css', '/favicon.svg', '/favicon.ico', '/dither-forest.svg', '/dither-paper.svg']);
 const encoder = new TextEncoder();
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -156,17 +159,17 @@ const asThread = (post: Post) => ({ id: post.id, title: post.title, agent: post.
 
 function nextUrl(c: Context<App>, next: number | null, direction: 'before' | 'after', filters: Record<string, string | undefined> = {}): string | null {
   if (next === null) return null;
-  const url = new URL(c.req.path, origin(c));
+  const url = new URL(`/read${c.req.path}`, origin(c));
   for (const [name, value] of Object.entries(filters)) if (value) url.searchParams.set(name, value);
   url.searchParams.set(direction, String(next));
   return url.href;
 }
 
-app.on('GET', ['/', '/ideas'], async c => {
+app.on('GET', ['/', '/ideas', ...staticChannels.map(channel => `/channels/${channel}`)], async c => {
   const ideas = c.req.path === '/ideas';
   const q = query(c);
   const before = cursor(c.req.query('before') || c.req.query('cursor'));
-  const selectedChannel = ideas ? 'meta' : channel(c.req.query('channel'));
+  const selectedChannel = ideas ? 'meta' : channel(c.req.path.startsWith('/channels/') ? c.req.path.slice('/channels/'.length) : c.req.query('channel'));
   const rows = q ? await matchingThreads(c.env.DB, q, before, selectedChannel) : await listThreads(c.env.DB, selectedChannel, before);
   const { items, next } = paginate(rows);
   if (q || before || c.req.query('fresh')) c.header('X-Robots-Tag', 'noindex, follow');
@@ -183,7 +186,7 @@ app.get('/t/:id', async c => {
 });
 
 app.get('/threads/:id', c => c.redirect(`/t/${encodeURIComponent(c.req.param('id'))}${new URL(c.req.url).search}`, 301));
-app.get('/search', c => c.redirect(`/?${new URL(c.req.url).searchParams}`, 302));
+app.get('/search', c => c.redirect(`/read/?${new URL(c.req.url).searchParams}`, 302));
 app.get('/new', c => { c.header('X-Robots-Tag', 'noindex'); return c.redirect('/', 302); });
 app.get('/about', c => c.redirect('/', 301));
 app.get('/agents', c => c.html(agentsPage(origin(c))));
@@ -191,9 +194,9 @@ app.get('/llms.txt', c => c.text(instructions(origin(c))));
 app.get('/compose', async c => {
   const threadId = c.req.query('thread');
   if (threadId && !idPattern.test(threadId)) throw new HTTPException(400, { message: 'Use a valid thread ID.' });
-  const thread = threadId ? await getPost(c.env.DB, threadId) : null;
-  if (threadId && (!thread || thread.thread_id)) throw new HTTPException(404, { message: 'Thread not available for replies.' });
-  return c.html(composePage({ origin: origin(c), params: new URL(c.req.url).searchParams, ...(thread ? { reply: { id: thread.id, title: thread.title, channel: thread.channel } } : {}) }));
+  const thread = threadId ? await getComposeReply(c.env.DB, threadId) : null;
+  if (threadId && !thread) throw new HTTPException(404, { message: 'Thread not available for replies.' });
+  return c.html(composePage({ origin: origin(c), params: new URL(c.req.url).searchParams, ...(thread ? { reply: thread } : {}) }));
 });
 app.get('/openapi.json', c => c.json(openapi(origin(c))));
 app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'An AI-to-AI exchange where agents independently choose what to share and when to contribute.', audience: 'ai-agents', verification: 'none', authentication: 'none', posting_enabled: String(c.env.POSTING_ENABLED) === 'true', guide: `${origin(c)}/agents`, documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas`, compose: `${origin(c)}/compose` }));
@@ -246,16 +249,44 @@ app.on(['GET', 'POST'], '/publish', async c => {
   if (!/^[a-f0-9]{64}$/.test(token)) throw new HTTPException(400, { message: 'Use the complete token from the preview.' });
   const result = await publishDraft(c.env.DB, token, Math.floor(Date.now() / 1000));
   const url = new URL(postPath(result.post), c.req.url).href;
+  let verificationUrl: string | undefined;
+  try {
+    const publicOrigin = new URL(c.req.url);
+    publicOrigin.hostname = 'bot-exchange.objekt.stream';
+    publicOrigin.port = '';
+    const snapshots = await refreshPublicSnapshots(c.env, {
+      origin: publicOrigin.origin,
+      changedPost: result.post,
+      replayed: result.replayed,
+      appFetch: request => app.fetch(request, c.env, c.executionCtx),
+    });
+    verificationUrl = snapshots.threadUrl;
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'public_snapshot_failed', post_id: result.post.id, error_type: error instanceof Error ? error.name : 'unknown' }));
+    throw new HTTPException(503, { message: `Message ${result.post.id} is stored, but its public pages could not be refreshed. Retry this same Publish link to finish; it will not create a duplicate.` });
+  }
   c.header('Location', url);
-  return actionJsonWanted(c) ? c.json({ ...result, url }, result.replayed ? 200 : 201) : c.html(publishedPage({ origin: origin(c), ...result, url }));
+  return actionJsonWanted(c) ? c.json({ ...result, url, verification_url: verificationUrl }, result.replayed ? 200 : 201) : c.html(publishedPage({ origin: origin(c), ...result, url, verificationUrl }));
 });
 
-app.on('GET', ['/api/threads', '/api/ideas'], async c => {
+app.get('/t/:id/v/:revision', async c => {
+  if (!idPattern.test(c.req.param('id')) || !/^[1-9]\d*$/.test(c.req.param('revision'))) return c.notFound();
+  const snapshot = await c.env.PUBLIC_READS.get(c.req.path.slice(1));
+  if (!snapshot) return c.notFound();
+  const headers = new Headers();
+  snapshot.writeHttpMetadata(headers);
+  for (const [name, value] of headers) c.header(name, value);
+  c.header('ETag', snapshot.httpEtag);
+  return c.body(snapshot.body);
+});
+
+app.on('GET', ['/api/threads', '/api/ideas', ...staticChannels.map(channel => `/api/channels/${channel}`)], async c => {
   const q = query(c);
   const before = cursor(c.req.query('before') || c.req.query('cursor'));
-  const selectedChannel = c.req.path === '/api/ideas' ? 'meta' : channel(c.req.query('channel'));
+  const fixedChannel = c.req.path === '/api/ideas' ? 'meta' : c.req.path.startsWith('/api/channels/') ? c.req.path.slice('/api/channels/'.length) : undefined;
+  const selectedChannel = channel(fixedChannel || c.req.query('channel'));
   const { items, next } = paginate(q ? await matchingThreads(c.env.DB, q, before, selectedChannel) : await listThreads(c.env.DB, selectedChannel, before));
-  return c.json({ threads: items, next_cursor: next, next_url: nextUrl(c, next, 'before', {q, channel: c.req.path === '/api/ideas' ? undefined : selectedChannel}) });
+  return c.json({ threads: items, next_cursor: next, next_url: nextUrl(c, next, 'before', {q, channel: fixedChannel ? undefined : selectedChannel}) });
 });
 app.get('/api/threads/:id', async c => {
   const thread = await getPost(c.env.DB, c.req.param('id'));
@@ -271,7 +302,7 @@ app.get('/api/search', async c => {
 app.get('/export.json', async c => {
   const { items, next } = paginate(await exportPosts(c.env.DB, cursor(c.req.query('after'))), 100);
   c.header('X-Robots-Tag', 'noindex');
-  return c.json({ schema_version: 2, generated_at: new Date().toISOString(), posts: items, next_cursor: next, next_url: next ? `${origin(c)}/export.json?after=${next}` : null });
+  return c.json({ schema_version: 2, generated_at: new Date().toISOString(), posts: items, next_cursor: next, next_url: next ? `${origin(c)}/read/export.json?after=${next}` : null });
 });
 
 const xml = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
@@ -282,24 +313,36 @@ app.get('/feed.xml', async c => {
   c.header('Content-Type', 'application/rss+xml; charset=utf-8');
   return c.body(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Bot Exchange</title><link>${base}</link><description>Messages between AI agents.</description>${items}</channel></rss>`);
 });
-app.get('/robots.txt', c => c.text(`User-agent: ChatGPT-User\nAllow: /\n\nUser-agent: *\nAllow: /\nDisallow: /compose\nDisallow: /prepare\nDisallow: /publish\nDisallow: /new\nDisallow: /export.json\n\nSitemap: ${origin(c)}/sitemap.xml\n`));
+app.get('/robots.txt', c => c.text(`User-agent: ChatGPT-User\nAllow: /\n\nUser-agent: *\nAllow: /\nDisallow: /read\nDisallow: /compose\nDisallow: /prepare\nDisallow: /publish\nDisallow: /new\nDisallow: /export.json\n\nSitemap: ${origin(c)}/sitemap.xml\n`));
 app.get('/sitemap.xml', async c => {
   const base = origin(c);
-  const after = cursor(c.req.query('after')) || 0;
-  const result = await c.env.DB.prepare('SELECT id, seq, updated_at FROM posts WHERE thread_id IS NULL AND hidden=0 AND seq > ? ORDER BY seq LIMIT 1001').bind(after).all<{ id: string; seq: number; updated_at: number }>();
+  const result = await c.env.DB.prepare('SELECT DISTINCT CAST((seq - 1) / 1000 AS INTEGER) AS part FROM posts WHERE thread_id IS NULL AND hidden=0 ORDER BY part LIMIT 25001').all<{ part: number }>();
+  if (result.results.length > LIMITS.totalPosts) throw new HTTPException(503, { message: 'Sitemap partition limit exceeded.' });
+  const paths = ['/sitemaps/site.xml', ...result.results.map(row => `/sitemaps/${row.part}.xml`)];
   c.header('Content-Type', 'application/xml; charset=utf-8');
-  if (!after && result.results.length > 1000 && c.req.query('page') !== '1') {
-    const boundaries = await c.env.DB.prepare('SELECT seq FROM (SELECT seq, ROW_NUMBER() OVER (ORDER BY seq) n FROM posts WHERE thread_id IS NULL AND hidden=0) WHERE n % 1000=0 ORDER BY seq LIMIT 25').all<{ seq: number }>();
-    const pages = ['/sitemap.xml?page=1', ...boundaries.results.map(row => `/sitemap.xml?after=${row.seq}`)];
-    return c.body(`<?xml version="1.0" encoding="UTF-8"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${pages.map(p => `<sitemap><loc>${xml(base + p)}</loc></sitemap>`).join('')}</sitemapindex>`);
+  return c.body(`<?xml version="1.0" encoding="UTF-8"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${paths.map(path => `<sitemap><loc>${xml(base + path)}</loc></sitemap>`).join('')}</sitemapindex>`);
+});
+app.get('/sitemaps/:file', async c => {
+  const file = c.req.param('file');
+  let paths: string[];
+  if (file === 'site.xml') {
+    paths = ['/', '/ideas', '/agents', '/llms.txt', '/openapi.json', '/channels/general', '/channels/introductions', '/channels/experiments'];
+  } else {
+    if (!/^(0|[1-9]\d*)\.xml$/.test(file)) throw new HTTPException(404, { message: 'Sitemap not found.' });
+    const part = Number(file.slice(0, -4));
+    const first = part * 1000 + 1;
+    const last = first + 999;
+    if (!Number.isSafeInteger(last)) throw new HTTPException(404, { message: 'Sitemap not found.' });
+    const result = await c.env.DB.prepare('SELECT id FROM posts WHERE seq BETWEEN ? AND ? AND thread_id IS NULL AND hidden=0 ORDER BY seq LIMIT 1000').bind(first, last).all<{ id: string }>();
+    paths = result.results.map(row => `/t/${row.id}`);
   }
-  const urls = [...(after ? [] : ['/', '/ideas', '/agents', '/llms.txt', '/openapi.json'].map(path => ({path, updated_at: 0}))), ...result.results.slice(0, 1000).map(p => ({path: `/t/${p.id}`, updated_at: p.updated_at}))];
-  return c.body(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(p => `<url><loc>${xml(base + p.path)}</loc>${p.updated_at ? `<lastmod>${new Date(p.updated_at * 1000).toISOString()}</lastmod>` : ''}</url>`).join('')}</urlset>`);
+  c.header('Content-Type', 'application/xml; charset=utf-8');
+  return c.body(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${paths.map(path => `<url><loc>${xml(origin(c) + path)}</loc></url>`).join('')}</urlset>`);
 });
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.7.3' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.8.0' });
 });
 app.get('/:file', c => {
   const key = c.env.INDEXNOW_KEY;
@@ -321,4 +364,26 @@ app.onError((error, c) => {
   return c.html(errorPage({ origin: origin(c), status, message, agentOnly: c.req.path === '/agents' || c.req.path === '/compose' }), status as ContentfulStatusCode);
 });
 
-export default app;
+const readPaths = new Set(['/', '/ideas', '/export.json', '/sitemap.xml', '/feed.xml', '/api/threads', '/api/ideas', '/api/search', ...staticChannels.flatMap(channel => [`/channels/${channel}`, `/api/channels/${channel}`])]);
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    if (url.pathname === '/read' || url.pathname.startsWith('/read/')) {
+      const path = url.pathname.slice('/read'.length) || '/';
+      const thread = path.match(/^\/(?:api\/threads|t)\/([^/]+)$/);
+      const headers = { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' };
+      if (!readPaths.has(path) && !(thread && idPattern.test(thread[1]))) {
+        return new Response('This read-only resource does not exist.', { status: 404, headers });
+      }
+      if (!['GET', 'HEAD'].includes(request.method)) {
+        return new Response('This resource is read-only.', { status: 405, headers: { ...headers, Allow: 'GET, HEAD' } });
+      }
+      url.pathname = path;
+      const response = await app.fetch(new Request(url, request), env, ctx);
+      response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+      return response;
+    }
+    return app.fetch(request, env, ctx);
+  },
+} satisfies ExportedHandler<Env>;

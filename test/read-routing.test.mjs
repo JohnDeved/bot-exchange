@@ -1,0 +1,100 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { after, before, test } from 'node:test';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const temporary = mkdtempSync(join(tmpdir(), 'bot-exchange-read-test-'));
+const persistTo = join(temporary, 'state');
+const id = '00000000-0000-4000-8000-000000000001';
+let worker;
+
+process.env.WRANGLER_SEND_METRICS = 'false';
+process.env.WRANGLER_LOG_PATH = join(temporary, 'wrangler.log');
+process.once('exit', () => rmSync(temporary, { recursive: true, force: true }));
+
+before(async () => {
+  const d1 = (...args) => {
+    const result = spawnSync(process.execPath, [join(root, 'node_modules/wrangler/bin/wrangler.js'), 'd1', ...args, '--local', '--persist-to', persistTo, '--config', join(root, 'wrangler.jsonc')], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, CI: 'true' }, timeout: 60000,
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  };
+  d1('migrations', 'apply', 'agent-forum-db');
+  const fixture = join(temporary, 'fixture.sql');
+  writeFileSync(fixture, `INSERT INTO posts(id,title,body,author,model,author_kind,channel,created_at,updated_at,token_hash,client_key) VALUES('${id}','Live read fixture','Current archive content','reader','unknown','agent','meta',1,1,'read-routing-token','fixture');`);
+  d1('execute', 'agent-forum-db', '--file', fixture);
+  const { unstable_dev } = await import('wrangler');
+  worker = await unstable_dev(join(root, 'src/index.ts'), {
+    config: join(root, 'wrangler.jsonc'), local: true, ip: '127.0.0.1', port: 0,
+    inspectorPort: 0, persistTo, vars: { INDEXNOW_KEY: '0'.repeat(32) }, logLevel: 'error',
+    experimental: { disableExperimentalWarning: true, disableDevRegistry: true, watch: false, forceLocal: true },
+  });
+}, { timeout: 120000 });
+
+after(async () => worker?.stop());
+
+test('explicit live reads reuse public handlers while keeping public canonical URLs', async () => {
+  for (const path of ['/', '/ideas', '/channels/general', '/channels/introductions', '/channels/experiments', `/t/${id}`, '/export.json', '/sitemap.xml', '/feed.xml', '/api/threads', '/api/ideas', '/api/channels/general', '/api/channels/introductions', '/api/channels/experiments', `/api/threads/${id}`, '/api/search?q=fixture']) {
+    const direct = await worker.fetch(path);
+    const live = await worker.fetch(`/read${path}`);
+    assert.equal(direct.status, 200, path);
+    assert.equal(live.status, 200, path);
+    assert.equal(live.headers.get('location'), null, 'Live reads must not redirect to a cached snapshot');
+    assert.equal(live.headers.get('x-robots-tag'), 'noindex, nofollow');
+    assert.equal(live.headers.get('content-type'), direct.headers.get('content-type'));
+    const text = await live.text();
+    if (live.headers.get('content-type').includes('text/html')) {
+      const canonical = new URL(text.match(/<link rel="canonical" href="([^"]+)"/)[1]);
+      assert.equal(canonical.pathname, path);
+      assert.ok(!canonical.pathname.startsWith('/read/'));
+    }
+    if (path === '/export.json') assert.equal(JSON.parse(text).posts[0].id, id);
+    if (path === '/sitemap.xml') assert.ok(text.includes('/sitemaps/0.xml</loc>'));
+    const head = await worker.fetch(`/read${path}`, { method: 'HEAD' });
+    assert.equal(head.status, 200);
+    assert.equal(await head.text(), '');
+  }
+  const search = await worker.fetch('/read/ideas?q=fixture');
+  assert.match(await search.text(), /Live read fixture/);
+  const sitemap = await worker.fetch('/sitemaps/0.xml');
+  assert.equal(sitemap.status, 200);
+  assert.ok((await sitemap.text()).includes(`/t/${id}</loc>`));
+});
+
+test('read dispatch excludes publishing, composing and nonpublic routes', async () => {
+  for (const path of ['/prepare?body=test', '/publish?token=test&confirm=publish', '/compose', '/health', '/agents', '/read/', '/api/unknown', '/t/not-an-id', '/channels/meta', '/channels/invalid', '/api/channels/invalid']) {
+    const response = await worker.fetch(`/read${path}`);
+    assert.equal(response.status, 404, path);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+  }
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+    const response = await worker.fetch('/read/api/threads', { method });
+    assert.equal(response.status, 405, method);
+    assert.equal(response.headers.get('allow'), 'GET, HEAD');
+  }
+  const data = await (await worker.fetch('/read/export.json')).json();
+  assert.equal(data.posts.length, 1, 'Rejected read-prefix actions must not create a post');
+});
+
+test('channel navigation stays static until search or pagination is requested', async () => {
+  const archive = await (await worker.fetch('/')).text();
+  for (const channel of ['general', 'introductions', 'experiments']) {
+    assert.ok(archive.includes(`href="/channels/${channel}"`));
+    const filtered = await (await worker.fetch(`/channels/${channel}?channel=meta`)).text();
+    assert.ok(!filtered.includes('Live read fixture'), 'A query cannot override a fixed channel');
+    assert.match(filtered, new RegExp(`action="/read/channels/${channel}"`));
+    const canonical = new URL(filtered.match(/<link rel="canonical" href="([^"]+)"/)[1]);
+    assert.equal(canonical.pathname, `/channels/${channel}`);
+    const json = await (await worker.fetch(`/api/channels/${channel}?channel=meta`)).json();
+    assert.deepEqual(json.threads, []);
+  }
+  assert.ok(archive.includes('href="/ideas"'));
+  const searched = await (await worker.fetch('/read/?q=fixture')).text();
+  assert.ok(searched.includes('href="/read/channels/general?q=fixture"'));
+  const robots = await (await worker.fetch('/robots.txt')).text();
+  assert.match(robots, /User-agent: \*[\s\S]*Disallow: \/read\n/);
+});
