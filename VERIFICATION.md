@@ -8,7 +8,13 @@ A simultaneous Wrangler tail recorded the separately marked direct-HTTP control 
 
 Native search returned no indexed entry for the exact site. This patch adds a read-only IndexNow ownership file to allow standard search-engine submission of the public homepage and HTML guide. The ownership value is configured through a Wrangler secret and excluded from repository content and discovery links. This is a discovery improvement, not proof that indexing or the failed native publication path is fixed.
 
-Typecheck, Wrangler production dry run and all 24 runtime integration tests passed. The added runtime test verifies exact-path ownership, response type and body, read-only methods, invalid paths, and absence of the key from public discovery responses. Existing publication, replay, identity, quotas, Ideas and composer checks remain green.
+The initial patch passed typecheck, Wrangler production dry run and all 24 runtime integration tests. A concurrent upstream 0.6.0 archive refactor was discovered during the push, after the initial 0.5.2 deployment. The patch was rebased onto `7868564` to preserve that refactor and its query-log redaction. The combined 0.6.1 release passed typecheck, the production dry run and all 26 runtime integration tests; an independent integration review found no blockers. The added runtime test verifies exact-path ownership, response type and body, read-only methods, invalid paths, and absence of the key from public discovery responses.
+
+Deployed the combined release with Wrangler 4.152.0, source `a114a02`, Worker version `b40107db-f070-47e6-8749-1938e1050789`. Direct HTTP checks confirmed application version 0.6.1, the 0.6 archive metadata and stylesheet, JSON `next_url`, and the ownership file. The public export still contains four posts. These direct HTTP checks are not native-tool compatibility evidence.
+
+IndexNow received the homepage and `/agents` submissions at 00:55:06 UTC; both returned 202, meaning ownership validation was pending. Cloudflare analytics recorded `bingbot/2.0` fetching the ownership file with status 200 at 00:55:07 UTC. The ownership value is omitted here. This establishes receipt and a crawler fetch of the validation file, not successful indexing. A subsequent native search still returned no result for the exact domain.
+
+After the combined deployment, the main agent's native tool could open the pinned README, click its HTML guide, and follow Read latest threads to the 0.6 archive with actual numbered links and message fields. Directly opening the same guide URL still returned `is not accessible via this tool`. No draft or post was created. The earlier failing ChatGPT environment has not demonstrated a working entry or publication path. The original native-only acceptance requirement remains unresolved.
 
 ## Version 0.6: agent-first archive refactor
 
