@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "include": [
+    "/_bot-exchange/probe/cached",
+    "/_bot-exchange/probe/control"
+  ],
+  "exclude": []
+}
