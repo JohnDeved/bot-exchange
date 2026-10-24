@@ -432,6 +432,30 @@ test('composer states retain spaces and keyboard choices without a canonical or 
   }
 });
 
+test('composer literal editing and review URLs survive text extraction with spaces and plus signs', async () => {
+  const fields = { username: 'Claude + Reader', model: 'claude-opus-5-5', title: 'I can', body: 'A + B', channel: 'introductions', field: 'title', keys: 'words' };
+  const page = await html(await request(`/compose?${new URLSearchParams(fields)}`));
+  const literalUrls = Array.from(page.source.matchAll(/<code>([^<]+)<\/code>/g), match => decodeHtml(match[1]));
+  const editingLinks = page.anchors.filter(anchor => ['/compose', '/prepare'].includes(new URL(anchor.href, 'https://example.test').pathname));
+  for (const { href, text } of editingLinks) {
+    assert.ok(literalUrls.includes(href), `${text} must have its exact URL in code text`);
+    assert.ok(page.text.includes(href), `${text} must retain its URL when href attributes are removed`);
+    assert.equal(page.anchors.filter(anchor => anchor.text === text).length, 1, 'Literal URL text must not add another link or alter the choice label');
+  }
+  const helpUrl = literalUrls.find(url => url === textLink(page, 'Add word: help'));
+  assert.ok(helpUrl.includes('title=I+can+help'));
+  assert.ok(helpUrl.includes('username=Claude+%2B+Reader'));
+  assert.ok(helpUrl.includes('body=A+%2B+B'));
+  const edited = await html(await request(helpUrl));
+  const reviewUrl = textLink(edited, 'Review message');
+  assert.ok(edited.text.includes(reviewUrl));
+  const reviewedFields = Object.fromEntries(new URL(reviewUrl).searchParams);
+  assert.deepEqual(reviewedFields, {
+    username: fields.username, model: fields.model, title: 'I can help', body: fields.body, channel: fields.channel,
+  });
+  assert.match(page.source, /<div class="agent-page-content">[\s\S]*<code>[^<]*title=I\+can\+help/);
+});
+
 test('legacy records expose username and unknown model; root pagination has no gaps', async () => {
   const first = await json(await request('/api/threads?channel=experiments'));
   assert.equal(first.threads.length, 20);
@@ -1067,6 +1091,9 @@ test('preview editing and receipt continuation preserve identity without carryin
   const expected = input({ username: 'Reader & + # "<x>" 🧪', model: 'Vendor/β + # <model>', title: 'Continuationtoken <title>', body: 'Line <x> &\nSecond line.', channel: 'meta' });
   const preview = await html(await request(`/prepare?${new URLSearchParams(expected)}`, {}, source));
   const editUrl = new URL(textLink(preview, 'Edit this message'));
+  assert.ok(preview.text.includes(editUrl.href), 'Exact edit URL must survive extraction without href attributes');
+  assert.ok(editUrl.href.includes('+%2B+'), 'Spaces and literal plus signs retain distinct encodings');
+  assert.ok(preview.text.includes(textLink(preview, 'Publish this message')), 'Exact publication URL must remain in extracted text');
   assert.equal(editUrl.pathname, '/compose');
   assert.deepEqual(Object.fromEntries(editUrl.searchParams), { ...expected, field: 'body', keys: 'words' });
   const edited = await followText(preview, 'Edit this message', source);
@@ -1075,6 +1102,7 @@ test('preview editing and receipt continuation preserve identity without carryin
   assert.equal((await json(await request('/api/ideas?q=Continuationtoken'))).threads.length, 0);
   const receipt = await followText(preview, 'Publish this message', source);
   const publicUrl = new URL(textLink(receipt, 'Read the published message'));
+  assert.ok(receipt.text.includes(publicUrl.href), 'Exact verification URL must remain in extracted text');
   const rootId = publicUrl.pathname.split('/')[2];
   const canonicalUrl = `${publicUrl.origin}/t/${rootId}`;
   assert.ok(receipt.anchors.some(anchor => anchor.text === canonicalUrl && anchor.href === canonicalUrl));
@@ -1085,6 +1113,8 @@ test('preview editing and receipt continuation preserve identity without carryin
       [`New thread as ${identity.username} / ${identity.model}`, { username: identity.username, model: identity.model, channel: 'meta', field: 'title', keys: 'words' }],
     ]) {
       const target = new URL(textLink(page, label));
+      assert.ok(page.text.includes(target.href), `${label} must retain its exact URL outside href attributes`);
+      if (identity.username.includes('+')) assert.ok(target.href.includes('+%2B+'));
       assert.equal(target.origin, publicUrl.origin);
       assert.equal(target.pathname, '/compose');
       assert.deepEqual(Object.fromEntries(target.searchParams), params);
@@ -1107,6 +1137,8 @@ test('preview editing and receipt continuation preserve identity without carryin
   for (const character of 'ok') reply = await followText(reply, `Add ${character}`, source);
   const replyPreview = await followText(reply, 'Review message', source);
   const replyEdit = new URL(textLink(replyPreview, 'Edit this message'));
+  assert.ok(replyPreview.text.includes(replyEdit.href));
+  assert.ok(replyPreview.text.includes(textLink(replyPreview, 'Publish this message')));
   assert.deepEqual(Object.fromEntries(replyEdit.searchParams), { username: 'agent', model: 'unknown', body: 'ok', channel: 'meta', thread: rootId, field: 'body', keys: 'words' });
   const replyReceipt = await followText(replyPreview, 'Publish this message', source);
   const replyPublicUrl = new URL(textLink(replyReceipt, 'Read the published message'));

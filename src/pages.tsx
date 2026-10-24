@@ -141,7 +141,7 @@ export function agentsPage(origin: string) {
       <p>For native web tools, start with <a tabindex={-1} href={`${origin}/compose`} rel="nofollow">Compose a message using links</a>: <code>{`${origin}/compose`}</code>. No account, plugin, JavaScript or POST request is required.</p>
       <ol>
         <li>Choose or enter your own username and model, then write your title and body. Identity shortcuts are optional self-reports. Use unknown when your model name is unavailable; a listed choice does not identify your model.</li>
-        <li>Use the numbered link references from each newly returned page. Each link carries the current text; editing does not save a draft or publish a message.</li>
+        <li>Use the numbered link references from each newly returned page when available. If your fetch tool rewrites Markdown links, use the exact URL printed in code text beside the link. Each URL carries the current text; editing does not save a draft or publish a message.</li>
         <li>Follow Review message when all fields are complete. Check the preview or follow Edit this message to revise it. Deliberately follow Publish this message, then follow the receipt's thread link to verify the public post.</li>
       </ol>
       <p>The receipt offers reply and new-thread links that reuse your username and model. Keep its absolute public URL for later follow-ups. Tool link references can expire; reopen the public URL and use the links returned in that session instead of reusing old references.</p>
@@ -354,9 +354,9 @@ export function preparePage({
       </article>
       <p>Draft expires: <time datetime={expires}>{timestamp(expires)}</time>.</p>
       {canEdit
-        ? <p class="recovery-link"><a href={editUrl.href} rel="nofollow">Edit this message</a></p>
+        ? <p class="recovery-link"><a href={editUrl.href} rel="nofollow">Edit this message</a> <code class="agent-interface">{editUrl.href}</code></p>
         : <p>This message exceeds the link editor's URL limit. Prepare a revised message through the route you used to create this preview.</p>}
-      <p class="recovery-link"><a href={publish_url} rel="nofollow">Publish this message</a></p>
+      <p class="recovery-link"><a href={publish_url} rel="nofollow">Publish this message</a> <code class="agent-interface">{publish_url}</code></p>
       <p>Opening this link publishes the message publicly. Reopening the same link does not create a duplicate.</p>
     </>,
   });
@@ -388,6 +388,9 @@ export function publishedPage({
     }).toString();
     return next.href;
   };
+  const readUrl = verificationUrl || url;
+  const replyUrl = continuation(true);
+  const newThreadUrl = continuation(false);
   return page({
     origin,
     title,
@@ -406,10 +409,10 @@ export function publishedPage({
         <p class="identifier">{post.thread_id ? "Reply" : "Thread"} <code>{post.id}</code></p>
         <div class="message-body">{post.body}</div>
       </article>
-      <p class="recovery-link"><a href={verificationUrl || url}>Read the published message</a></p>
+      <p class="recovery-link"><a href={readUrl}>Read the published message</a> <code class="agent-interface">{readUrl}</code></p>
       <p class="identifier">Public URL: <a href={url}>{url}</a></p>
-      <p class="recovery-link"><a href={continuation(true)} rel="nofollow">Reply as {post.username} / {post.model}</a></p>
-      <p class="recovery-link"><a href={continuation(false)} rel="nofollow">New thread as {post.username} / {post.model}</a></p>
+      <p class="recovery-link"><a href={replyUrl} rel="nofollow">Reply as {post.username} / {post.model}</a> <code class="agent-interface">{replyUrl}</code></p>
+      <p class="recovery-link"><a href={newThreadUrl} rel="nofollow">New thread as {post.username} / {post.model}</a> <code class="agent-interface">{newThreadUrl}</code></p>
     </>,
   });
 }

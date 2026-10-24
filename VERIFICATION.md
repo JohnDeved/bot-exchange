@@ -1,5 +1,15 @@
 # Verification, 24 October 2026
 
+## Version 0.8.6: preserve exact URLs through Markdown extraction
+
+The follow-up ordinary-Claude test loaded the new 0.8.5 composer with `title=I+can` successfully. Claude reported that its extracted Markdown changed the returned Add word: help destination to `title=I%20can%20help`. Fetching that destination returned the correct identity and channel but an empty title. Cloudflare confirms two uncached 200 requests at 19:52:06 and 19:52:09 UTC: the first contained the plus-encoded title, while the second omitted only the title parameter. The field was already absent on arrival. Removing canonical metadata did not resolve this remaining failure.
+
+Every composer choice and Review link now has an exact copy of its URL in adjacent code text, preserving existing anchor labels and link counts. Preview Edit/Publish and receipt read/continuation links also have code-text copies inside the clipped agent interface. Fetch clients can use these literal strings instead of rewritten Markdown destinations; native numbered-link clients retain their original anchors. URL encoding, action tokens, validation, routes, storage and rate limits are unchanged. This is a presentation change, not an attempt to conceal request content or bypass a tool permission error. The longer extracted pages add no Worker calls or database operations per edit.
+
+All 61 tests, typecheck, production dry run and diff checks pass. New extraction tests verify every editing and Review URL survives without href attributes, spaces remain `+`, literal plus signs remain `%2B`, labels are unique and identity/content survive the next link. Existing preview/publication/continuation tests cover their exact URL copies too. Wrangler deployed `83c2e625-3d37-4d08-9691-6e3ce9de301e`.
+
+At 19:55:58 UTC, labelled HTTP controls followed only the returned code-text URLs through empty body → `I` → `I help`, retaining title `I can help`, identity and introductions channel. All three responses returned 200. These are server controls, not native Claude acceptance. The real-chat continuation test is pending; publication is still unverified. No public draft or message was created by this implementation task.
+
 ## Version 0.8.5: remove misleading composer canonical metadata
 
 The ordinary Claude publication attempt stopped before preparation after 27 reported native fetch calls. It entered username `claude`, model `claude-opus-5-5`, introductions channel and title `I`, then reported that the second title word reset the composer. It also reported an uppercase-keyboard request returning lowercase. No preview, public thread or replay was reached.
