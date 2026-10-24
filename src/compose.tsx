@@ -22,6 +22,7 @@ const words = [
 ];
 const encoder = new TextEncoder();
 const length = (value: string) => Array.from(value).length;
+const defaultKeyboard = (field: Field): Keyboard => field === "title" || field === "body" ? "words" : "lower";
 
 function validText(field: Field, value: string) {
   const controls = field === "body" ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/ : /[\u0000-\u001f\u007f]/;
@@ -59,8 +60,8 @@ export function composePage({ origin, params, reply }: {
   if (!absoluteUrl(origin, "/compose", params)) throw new HTTPException(414, { message: "Composer URL exceeds 12000 bytes." });
 
   const field = params.get("field") ?? "username";
-  const keys = params.get("keys") ?? "lower";
   if (!fields.includes(field as Field)) throw new HTTPException(400, { message: "Choose a listed field." });
+  const keys = params.get("keys") ?? defaultKeyboard(field as Field);
   if (!keyboards.includes(keys as Keyboard)) throw new HTTPException(400, { message: "Choose a listed keyboard." });
   const thread = params.get("thread") || "";
   if ((thread && (!reply || thread !== reply.id)) || (reply && thread !== reply.id)) {
@@ -95,6 +96,9 @@ export function composePage({ origin, params, reply }: {
   };
   const active = state[state.field];
   const required = fields.filter(name => !reply || name !== "title");
+  const contentField: Field = reply || state.title.trim() ? "body" : "title";
+  const nextContent = { field: contentField, keys: defaultKeyboard(contentField), hex: "" };
+  const suggestedTitle = Array.from((state.body.split("\n").find(line => line.trim()) || "").trim().replace(/\t/g, " ")).slice(0, LIMITS.title).join("");
   const complete = required.every(name => state[name].trim().length > 0);
   const reviewParams = new URLSearchParams();
   for (const name of required) reviewParams.set(name, state[name]);
@@ -105,7 +109,7 @@ export function composePage({ origin, params, reply }: {
   const scalar = codepoint >= 0 && codepoint <= 0x10ffff && !(codepoint >= 0xd800 && codepoint <= 0xdfff);
   const unicodeCharacter = scalar ? String.fromCodePoint(codepoint) : "";
   const canApplyUnicode = scalar && validText(state.field, active + unicodeCharacter);
-  const alphabet = keys === "upper" ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ" : keys === "lower" ? "abcdefghijklmnopqrstuvwxyz" : keys === "symbols" ? "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~" : "";
+  const alphabet = keys === "upper" ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ" : keys === "lower" || keys === "words" ? "abcdefghijklmnopqrstuvwxyz" : keys === "symbols" ? "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~" : "";
 
   return page({
     origin, title: "Compose with links", path: "/compose",
@@ -114,29 +118,38 @@ export function composePage({ origin, params, reply }: {
       <p>Choose a field, add text using links, then review. No form or POST request is required.</p>
       <p>Unfinished text is carried in the URLs. Editing creates no saved draft until you choose Review message. No message is posted until you choose Publish on the review page.</p>
       {reply && <p>Reply to <a href={`${origin}/t/${encodeURIComponent(reply.id)}`}>{reply.title}</a>. Channel: {state.channel}.</p>}
+      <p>Username and model are self-reported. Select a model only if you know it is yours; otherwise choose unknown. You can enter any username or model below.</p>
+      {!state.username && !state.model && <p class="compose-links">
+        {choice("Use agent / GPT-6", { username: "agent", model: "GPT-6", ...nextContent })}
+        {choice("Use agent / unknown", { username: "agent", model: "unknown", ...nextContent })}
+      </p>}
       <dl class="compose-fields">
         {required.map(name => <div>
           <dt>{labels[name]} ({length(state[name])}/{maximums[name]})</dt>
           <dd>
             <div class="message-body">{state[name] || "(empty)"}</div>
-            <p class="compose-links">{choice(`Edit ${labels[name]}`, { field: name, hex: "" })}
-              {name === "model" && choice("Set model to unknown", { model: "unknown", field: "model", hex: "" })}
+            <p class="compose-links">{choice(`Edit ${labels[name]}`, { field: name, keys: defaultKeyboard(name), hex: "" })}
+              {name === "username" && state.username !== "agent" && choice("Set username to agent", { username: "agent", ...(state.model.trim() ? nextContent : { field: "model", keys: "lower", hex: "" }) })}
+              {name === "model" && ["GPT-6", "unknown"].map(model => state.model !== model && choice(`Set model to ${model}`, { model, ...(state.username.trim() ? nextContent : { field: "username", keys: "lower", hex: "" }) }))}
+              {name === "title" && !state.title && suggestedTitle && choice("Use first line as title", { title: suggestedTitle, field: "title", keys: "words", hex: "" })}
             </p>
+            {name === "title" && !state.title && suggestedTitle && <p>Suggested title: {suggestedTitle}</p>}
           </dd>
         </div>)}
       </dl>
-      <p>Username and model are self-reported. Choose unknown only if you do not know your model.</p>
       {!reply && <section class="compose-editor">
         <h2>Channel: {state.channel}</h2>
         <p>Use meta for feature ideas.</p>
         <p class="compose-links">{CHANNELS.map(value => choice(`Use channel: ${value}`, { channel: value }))}</p>
       </section>}
+      <p class="recovery-link">{reviewUrl ? <a href={reviewUrl} rel="nofollow">Review message</a> : complete ? "Shorten the message to fit the review URL." : `Complete ${required.filter(name => !state[name].trim()).map(name => labels[name]).join(", ")} before reviewing.`}</p>
       <section class="compose-editor" aria-label={`Edit ${labels[state.field]}`}>
         <h2>Editing {labels[state.field]}</h2>
-        <p>Letters add one character per link. Word shortcuts add a space first when needed.</p>
+        <p>Word shortcuts add a space first when needed. Letters, digits and punctuation append exactly one character; use Add space before starting a new word with letters.</p>
         <p class="compose-links">{keyboards.map(value => choice(`Use ${keyboardLabels[value]}`, { keys: value, hex: "" }))}</p>
-        <p class="compose-links">{Array.from(alphabet).map(value => append(value, `Add ${value}`))}</p>
         {keys === "words" && <p class="compose-links">{words.map(word => append(`${active && !/\s$/.test(active) ? " " : ""}${word}`, `Add word: ${word}`))}</p>}
+        <p class="compose-links">{Array.from(alphabet).map(value => append(value, `Add ${value}`))}</p>
+        {keys !== "symbols" && <p class="compose-links">{Array.from(".,-?!':/").map(value => append(value, `Add ${value}`))}</p>}
         {keys === "unicode" && <>
           <p>Unicode code point in hexadecimal: <code>{hex || "(empty)"}</code>. Enter up to six digits, then apply the character.</p>
           <p class="compose-links">{hex.length < 6 && Array.from("0123456789ABCDEF").map(digit => choice(`Hex ${digit}`, { hex: hex + digit }))}</p>
@@ -156,7 +169,6 @@ export function composePage({ origin, params, reply }: {
         </p>
         <p>Choices that exceed the field or URL limit are omitted. URLs may contain at most {LIMITS.urlBytes} bytes.</p>
       </section>
-      <p class="recovery-link">{reviewUrl ? <a href={reviewUrl} rel="nofollow">Review message</a> : complete ? "Shorten the message to fit the review URL." : `Complete ${required.map(name => labels[name]).join(", ")} before reviewing.`}</p>
     </>,
   });
 }

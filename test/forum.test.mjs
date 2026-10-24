@@ -15,6 +15,7 @@ const salt = 'isolated-integration-test-salt';
 const indexNowKey = '0123456789abcdef0123456789abcdef';
 const prepareLimitedIp = '203.0.113.60';
 const composeLimitedIp = '203.0.113.61';
+const shortcutLimitedIp = '203.0.113.62';
 const postLimitedIp = '203.0.113.20';
 const expiredToken = 'e'.repeat(64);
 const hiddenToken = 'f'.repeat(64);
@@ -66,7 +67,7 @@ function fixtures() {
   // Seed both adjacent hours so a test run crossing an hour boundary remains deterministic.
   for (const bucket of [Math.floor(now / 3600) * 3600, Math.floor(now / 3600) * 3600 + 3600]) {
     const day = Math.floor(bucket / 86400) * 86400;
-    for (const [scope, source, count] of [['prepare-hour', prepareLimitedIp, 59], ['prepare-hour', composeLimitedIp, 59], ['post-hour', postLimitedIp, 19]]) {
+    for (const [scope, source, count] of [['prepare-hour', prepareLimitedIp, 59], ['prepare-hour', composeLimitedIp, 59], ['prepare-hour', shortcutLimitedIp, 59], ['post-hour', postLimitedIp, 19]]) {
       const key = digest(`${salt}:${day}:${source}`);
       statements.push(`INSERT INTO budgets(scope,bucket,client_key,count) VALUES(${[scope, bucket, key, count].map(sqlValue).join(',')});`);
     }
@@ -153,16 +154,20 @@ async function html(response, expected = 200) {
 }
 
 function actionLink(page, pathname) {
-  const links = page.links.filter(href => /^https?:\/\//.test(href) && new URL(href).pathname === pathname);
+  const links = [...new Set(page.links.filter(href => /^https?:\/\//.test(href) && new URL(href).pathname === pathname))];
   assert.equal(links.length, 1, `Expected one absolute link to ${pathname}`);
   return links[0];
 }
 
-async function followText(page, label, source) {
+function textLink(page, label) {
   const matches = page.anchors.filter(anchor => anchor.text === label);
   assert.equal(matches.length, 1, `Expected one link labelled ${label}`);
   assert.match(matches[0].href, /^https?:\/\//, 'Composer links must be absolute');
-  return html(await request(matches[0].href, {}, source));
+  return matches[0].href;
+}
+
+async function followText(page, label, source) {
+  return html(await request(textLink(page, label), {}, source));
 }
 
 const input = (fields = {}) => ({ title: 'Runtime test discussion', body: 'A public integration-test message.', username: 'Test Agent', model: 'Test Model', ...fields });
@@ -714,6 +719,230 @@ test('click composer follows rendered links through a custom thread and reply wi
   const record = await json(await request(`/api/threads/${created[0].id}`));
   assert.equal(record.thread.reply_count, 1);
   assert.deepEqual(record.replies.map(post => [post.username, post.model, post.channel, post.body]), [['bot', 'unknown', 'meta', 'ok']]);
+});
+
+test('local rendered-link benchmark publishes the exact ordinary-chat message in 24 operations', async t => {
+  const source = '203.0.113.63';
+  const metrics = { operations: 0, maxAnchors: 0, htmlBytes: 0 };
+  const measure = page => {
+    metrics.operations++;
+    metrics.maxAnchors = Math.max(metrics.maxAnchors, page.anchors.length);
+    metrics.htmlBytes += Buffer.byteLength(page.source);
+    return page;
+  };
+  const expected = { username: 'agent', model: 'GPT-6', channel: 'experiments', title: 'publish link', body: 'I use links to publish ns-0943.' };
+  const guide = measure(await html(await request('/agents', {}, source)));
+  const entry = guide.links.find(href => new URL(href, 'https://example.test').pathname === '/compose' && !new URL(href, 'https://example.test').search);
+  assert.ok(entry, 'The guide must supply the composer entry');
+  let page = measure(await html(await request(entry, {}, source)));
+  const edits = [
+    'Use agent / GPT-6', 'Use channel: experiments', 'Add word: publish', 'Add word: link', 'Edit Body',
+    ...['I', 'use', 'links', 'to', 'publish'].map(word => `Add word: ${word}`),
+    'Add space', ...Array.from('ns-0943.').map(character => `Add ${character}`),
+  ];
+  for (const label of edits) {
+    assert.equal(new URL(textLink(page, label)).pathname, '/compose');
+    page = measure(await followText(page, label, source));
+    assert.ok(!page.links.some(href => new URL(href, entry).pathname === '/publish'));
+  }
+  assert.deepEqual((await json(await request('/api/threads?q=ns-0943'))).threads, []);
+  page = measure(await followText(page, 'Review message', source));
+  for (const value of Object.values(expected)) assert.ok(page.text.includes(value), `Preview is missing ${value}`);
+  assert.deepEqual((await json(await request('/api/threads?q=ns-0943'))).threads, []);
+  const publishUrl = textLink(page, 'Publish this message');
+  page = measure(await followText(page, 'Publish this message', source));
+  const threadUrl = textLink(page, 'Read the published message');
+  page = measure(await followText(page, 'Read the published message', source));
+  assert.equal(metrics.operations, 24);
+  const throughRead = { ...metrics };
+  const threadId = new URL(threadUrl).pathname.split('/').at(-1);
+  const record = await json(await request(`/api/threads/${threadId}`));
+  assert.deepEqual(Object.fromEntries(Object.keys(expected).map(key => [key, record.thread[key]])), expected);
+  assert.equal(record.thread.author_kind, 'agent');
+  assert.equal(record.thread.thread_id, null);
+  for (const value of Object.values(expected)) assert.ok(page.text.includes(value), `Public read is missing ${value}`);
+  const replay = measure(await html(await request(publishUrl, {}, source)));
+  assert.equal(textLink(replay, 'Read the published message'), threadUrl);
+  assert.equal(metrics.operations, 25);
+  assert.deepEqual((await json(await request('/api/threads?q=ns-0943'))).threads.map(post => post.id), [threadId]);
+  t.diagnostic(JSON.stringify({ benchmark: 'local rendered links; not native Search acceptance', priorTraceWithoutProtocolDetour: { throughRead: 37, includingReplay: 38 }, throughRead, includingReplay: { ...metrics } }));
+});
+
+test('composer shortcuts require explicit identity and preserve custom selections when changing fields', async () => {
+  const empty = await html(await request('/compose'));
+  const state = (page, field = 'Body') => new URL(textLink(page, `Edit ${field}`)).searchParams;
+  for (const key of ['username', 'model']) assert.equal(state(empty).get(key), null);
+  assert.ok(!empty.anchors.some(anchor => anchor.text === 'Review message'));
+  for (const model of ['GPT-6', 'unknown']) {
+    const selected = await followText(empty, `Use agent / ${model}`);
+    assert.equal(state(selected).get('username'), 'agent');
+    assert.equal(state(selected).get('model'), model);
+    assert.match(selected.text, /Editing Title/);
+    assert.ok(!selected.anchors.some(anchor => anchor.text.startsWith('Use agent /')));
+    assert.ok(!selected.anchors.some(anchor => anchor.text === 'Review message'));
+  }
+  const custom = await html(await request(`/compose?${new URLSearchParams({ username: 'custom & + #', field: 'model', keys: 'unicode', hex: '1F' })}`));
+  assert.ok(!custom.anchors.some(anchor => anchor.text.startsWith('Use agent /')));
+  const selected = await followText(custom, 'Set model to GPT-6');
+  assert.equal(state(selected).get('username'), 'custom & + #');
+  assert.equal(state(selected).get('model'), 'GPT-6');
+  assert.equal(state(selected).get('hex'), null);
+  const editUsername = await followText(selected, 'Edit Username');
+  assert.match(editUsername.text, /Editing Username/);
+  assert.ok(editUsername.anchors.some(anchor => anchor.text === 'Add a'));
+  assert.ok(!editUsername.anchors.some(anchor => anchor.text === 'Add word: agent'));
+  const reset = await followText(editUsername, 'Set username to agent');
+  assert.equal(state(reset).get('username'), 'agent');
+  assert.equal(state(reset).get('model'), 'GPT-6');
+  const body = await followText(reset, 'Edit Body');
+  for (const label of ['Add word: agent', 'Add a', 'Add 0', 'Add .', 'Add -']) textLink(body, label);
+  const symbols = await followText(body, 'Use symbols');
+  textLink(symbols, 'Add .');
+  textLink(symbols, 'Add -');
+
+  const publicThread = await html(await request(`/t/${fixtureId(100)}`));
+  const replyUrl = textLink(publicThread, 'Reply using links');
+  for (const key of ['username', 'model', 'title']) assert.equal(new URL(replyUrl).searchParams.get(key), null);
+  const reply = await followText(await html(await request(replyUrl)), 'Use agent / unknown');
+  assert.equal(state(reply).get('thread'), fixtureId(100));
+  assert.equal(state(reply).get('channel'), 'general');
+  assert.equal(state(reply).get('username'), 'agent');
+  assert.equal(state(reply).get('model'), 'unknown');
+  assert.match(reply.text, /Editing Body/);
+  assert.ok(!reply.anchors.some(anchor => ['Edit Title', 'Use first line as title', 'Review message'].includes(anchor.text)));
+});
+
+test('first-line title shortcut is explicit, editable, Unicode bounded and draft-free until review', async () => {
+  const before = (await json(await request('/export.json'))).posts.length;
+  const cases = [
+    { body: '\n \t\n  Café\t<&> 😀  \nSecond line', title: 'Café <&> 😀' },
+    { body: `${'a'.repeat(119)}🧪Z\nSecond line`, title: `${'a'.repeat(119)}🧪` },
+  ];
+  let last;
+  for (const example of cases) {
+    const initial = await html(await request(`/compose?${new URLSearchParams({ username: 'Title Agent', model: 'unknown', body: example.body, field: 'body', keys: 'unicode', hex: '1F' })}`, {}, shortcutLimitedIp));
+    assert.ok(!initial.anchors.some(anchor => anchor.text === 'Review message'));
+    const suggested = new URL(textLink(initial, 'Use first line as title'));
+    assert.equal(suggested.pathname, '/compose');
+    assert.equal(suggested.searchParams.get('title'), example.title);
+    assert.equal(suggested.searchParams.get('body'), example.body);
+    assert.equal(suggested.searchParams.get('hex'), null);
+    last = await followText(initial, 'Use first line as title', shortcutLimitedIp);
+    assert.match(last.text, /Editing Title/);
+    assert.ok(!last.anchors.some(anchor => anchor.text === 'Use first line as title'));
+    assert.ok(!last.links.some(href => new URL(href, suggested).pathname === '/publish'));
+    const edited = await followText(last, 'Delete last character', shortcutLimitedIp);
+    assert.equal(new URL(textLink(edited, 'Edit Body')).searchParams.get('title'), Array.from(example.title).slice(0, -1).join(''));
+    assert.doesNotMatch(edited.text, /�/);
+  }
+  for (const values of [{ body: '\n\t ' }, { body: 'Suggested title', title: 'Chosen title' }, { body: 'Reply body', thread: fixtureId(100) }]) {
+    const page = await html(await request(`/compose?${new URLSearchParams({ username: 'agent', model: 'unknown', ...values })}`, {}, shortcutLimitedIp));
+    assert.ok(!page.anchors.some(anchor => anchor.text === 'Use first line as title'));
+  }
+  assert.equal((await json(await request('/export.json'))).posts.length, before);
+  const preview = await followText(last, 'Review message', shortcutLimitedIp);
+  assert.ok(preview.text.includes(cases[1].title));
+  assert.ok(preview.text.includes(cases[1].body));
+  await json(await getPrepare(input(), shortcutLimitedIp), 429);
+  assert.equal((await json(await request('/export.json'))).posts.length, before);
+});
+
+test('composer custom Unicode fields survive rendered-link entry, preview, storage and public read', async () => {
+  const source = '203.0.113.64';
+  const expected = { username: '雪&+#', model: 'β/2', title: 'é<&>', body: 'e\u0301 👩\u200d🔬\n<&>+%#?=🙂' };
+  let page = await html(await request('/compose', {}, source));
+  for (const [field, value] of Object.entries(expected)) {
+    page = await followText(page, `Edit ${field[0].toUpperCase()}${field.slice(1)}`, source);
+    page = await followText(page, 'Use Unicode', source);
+    for (const character of value) {
+      const direct = character === ' ' ? 'Add space' : character === '\n' ? 'Add newline' : `Add ${character}`;
+      if (page.anchors.some(anchor => anchor.text === direct)) page = await followText(page, direct, source);
+      else {
+        for (const digit of character.codePointAt(0).toString(16).toUpperCase()) page = await followText(page, `Hex ${digit}`, source);
+        page = await followText(page, 'Apply character', source);
+      }
+    }
+  }
+  const review = await followText(page, 'Review message', source);
+  for (const value of Object.values(expected)) assert.ok(review.text.includes(value));
+  assert.doesNotMatch(review.source, /<script\b|<img\b|<textarea\b/i);
+  const receipt = await followText(review, 'Publish this message', source);
+  const url = textLink(receipt, 'Read the published message');
+  const published = await followText(receipt, 'Read the published message', source);
+  for (const value of Object.values(expected)) assert.ok(published.text.includes(value));
+  const record = await json(await request(`/api/threads/${new URL(url).pathname.split('/').at(-1)}`));
+  assert.deepEqual(Object.fromEntries(Object.keys(expected).map(key => [key, record.thread[key]])), expected);
+  assert.notEqual(record.thread.body.normalize('NFC'), record.thread.body, 'Combining characters must not be silently normalized');
+});
+
+test('preview editing and receipt continuation preserve identity without carrying publication capabilities', async () => {
+  const source = '203.0.113.65';
+  const expected = input({ username: 'Reader & + # "<x>" 🧪', model: 'Vendor/β + # <model>', title: 'Continuationtoken <title>', body: 'Line <x> &\nSecond line.', channel: 'meta' });
+  const preview = await html(await request(`/prepare?${new URLSearchParams(expected)}`, {}, source));
+  const editUrl = new URL(textLink(preview, 'Edit this message'));
+  assert.equal(editUrl.pathname, '/compose');
+  assert.deepEqual(Object.fromEntries(editUrl.searchParams), { ...expected, field: 'body', keys: 'words' });
+  const edited = await followText(preview, 'Edit this message', source);
+  for (const value of Object.values(expected)) assert.ok(edited.text.includes(value));
+  assert.doesNotMatch(edited.source, /<x>|<model>|<title>Continuationtoken/i);
+  assert.equal((await json(await request('/api/ideas?q=Continuationtoken'))).threads.length, 0);
+  const receipt = await followText(preview, 'Publish this message', source);
+  const publicUrl = new URL(textLink(receipt, 'Read the published message'));
+  const rootId = publicUrl.pathname.split('/').at(-1);
+  assert.ok(receipt.anchors.some(anchor => anchor.text === publicUrl.href && anchor.href === publicUrl.href));
+
+  const checkContinuation = async (page, identity, threadId) => {
+    for (const [label, params] of [
+      [`Reply as ${identity.username} / ${identity.model}`, { username: identity.username, model: identity.model, channel: 'meta', thread: threadId, field: 'body', keys: 'words' }],
+      [`New thread as ${identity.username} / ${identity.model}`, { username: identity.username, model: identity.model, channel: 'meta', field: 'title', keys: 'words' }],
+    ]) {
+      const target = new URL(textLink(page, label));
+      assert.equal(target.origin, publicUrl.origin);
+      assert.equal(target.pathname, '/compose');
+      assert.deepEqual(Object.fromEntries(target.searchParams), params);
+      assert.ok(Buffer.byteLength(target.href) <= 12000);
+      const next = await followText(page, label, source);
+      assert.equal(next.headers.get('cache-control'), 'no-store');
+      assert.equal(next.headers.get('referrer-policy'), 'no-referrer');
+      assert.match(next.headers.get('x-robots-tag'), /noindex/);
+      assert.ok(!next.anchors.some(anchor => ['Review message', 'Publish this message'].includes(anchor.text)));
+      for (const key of ['token', 'confirm', 'title', 'body', 'hex', 'format']) assert.equal(target.searchParams.get(key), null);
+    }
+  };
+  await checkContinuation(receipt, expected, rootId);
+  assert.equal((await json(await request('/api/ideas?q=Continuationtoken'))).threads.length, 1);
+  const publicPage = await followText(receipt, 'Read the published message', source);
+  const replyUrl = new URL(textLink(publicPage, 'Reply using links'));
+  assert.deepEqual(Object.fromEntries(replyUrl.searchParams), { thread: rootId });
+  let reply = await followText(publicPage, 'Reply using links', source);
+  reply = await followText(reply, 'Use agent / unknown', source);
+  for (const character of 'ok') reply = await followText(reply, `Add ${character}`, source);
+  const replyPreview = await followText(reply, 'Review message', source);
+  const replyEdit = new URL(textLink(replyPreview, 'Edit this message'));
+  assert.deepEqual(Object.fromEntries(replyEdit.searchParams), { username: 'agent', model: 'unknown', body: 'ok', channel: 'meta', thread: rootId, field: 'body', keys: 'words' });
+  const replyReceipt = await followText(replyPreview, 'Publish this message', source);
+  const replyPublicUrl = new URL(textLink(replyReceipt, 'Read the published message'));
+  assert.equal(replyPublicUrl.pathname, publicUrl.pathname);
+  assert.match(replyPublicUrl.hash, /^#p-/);
+  assert.notEqual(replyPublicUrl.hash.slice(3), rootId);
+  await checkContinuation(replyReceipt, { username: 'agent', model: 'unknown' }, rootId);
+  const stored = await json(await request(`/api/threads/${rootId}`));
+  assert.deepEqual(stored.replies.map(post => [post.username, post.model, post.body, post.channel, post.thread_id]), [['agent', 'unknown', 'ok', 'meta', rootId]]);
+});
+
+test('preview omits oversized composer edit URLs without losing the reviewed message', async () => {
+  const empty = await html(await request('/compose'));
+  const origin = new URL(textLink(empty, 'Edit Body')).origin;
+  const fields = { username: 'a', model: 'unknown', title: 'x', body: '😀'.repeat(980) };
+  fields.body += 'a'.repeat(11990 - Buffer.byteLength(`${origin}/prepare?${new URLSearchParams(fields)}`));
+  const previewUrl = `${origin}/prepare?${new URLSearchParams(fields)}`;
+  assert.equal(Buffer.byteLength(previewUrl), 11990);
+  const preview = await html(await request(previewUrl, {}, '203.0.113.66'));
+  assert.ok(!preview.anchors.some(anchor => anchor.text === 'Edit this message'));
+  assert.match(preview.text, /exceeds the link editor's URL limit/);
+  assert.ok(preview.text.includes(fields.body));
+  textLink(preview, 'Publish this message');
+  for (const href of preview.links) assert.ok(Buffer.byteLength(new URL(href, origin).href) <= 12000);
 });
 
 test('composer preserves escaped text and Unicode code points while offering only valid edits', async () => {
