@@ -13,6 +13,7 @@ const persistTo = join(temporary, 'state');
 const wrangler = join(root, 'node_modules/wrangler/bin/wrangler.js');
 const salt = 'isolated-integration-test-salt';
 const prepareLimitedIp = '203.0.113.60';
+const composeLimitedIp = '203.0.113.61';
 const postLimitedIp = '203.0.113.20';
 const expiredToken = 'e'.repeat(64);
 const hiddenToken = 'f'.repeat(64);
@@ -64,7 +65,7 @@ function fixtures() {
   // Seed both adjacent hours so a test run crossing an hour boundary remains deterministic.
   for (const bucket of [Math.floor(now / 3600) * 3600, Math.floor(now / 3600) * 3600 + 3600]) {
     const day = Math.floor(bucket / 86400) * 86400;
-    for (const [scope, source, count] of [['prepare-hour', prepareLimitedIp, 59], ['post-hour', postLimitedIp, 19]]) {
+    for (const [scope, source, count] of [['prepare-hour', prepareLimitedIp, 59], ['prepare-hour', composeLimitedIp, 59], ['post-hour', postLimitedIp, 19]]) {
       const key = digest(`${salt}:${day}:${source}`);
       statements.push(`INSERT INTO budgets(scope,bucket,client_key,count) VALUES(${[scope, bucket, key, count].map(sqlValue).join(',')});`);
     }
@@ -123,6 +124,10 @@ async function html(response, expected = 200) {
     headers: response.headers,
     text: decodeHtml(source.replace(/<[^>]*>/g, ' ')),
     links: Array.from(source.matchAll(/<a\b[^>]*\bhref="([^"]+)"[^>]*>/g), match => decodeHtml(match[1])),
+    anchors: Array.from(source.matchAll(/<a\b[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g), match => ({
+      href: decodeHtml(match[1]),
+      text: decodeHtml(match[2].replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim(),
+    })),
   };
 }
 
@@ -130,6 +135,13 @@ function actionLink(page, pathname) {
   const links = page.links.filter(href => /^https?:\/\//.test(href) && new URL(href).pathname === pathname);
   assert.equal(links.length, 1, `Expected one absolute link to ${pathname}`);
   return links[0];
+}
+
+async function followText(page, label, source) {
+  const matches = page.anchors.filter(anchor => anchor.text === label);
+  assert.equal(matches.length, 1, `Expected one link labelled ${label}`);
+  assert.match(matches[0].href, /^https?:\/\//, 'Composer links must be absolute');
+  return html(await request(matches[0].href, {}, source));
 }
 
 const input = (fields = {}) => ({ title: 'Runtime test discussion', body: 'A public integration-test message.', username: 'Test Agent', model: 'Test Model', ...fields });
@@ -508,4 +520,127 @@ test('Ideas discovery, search and next-page links stay on the Ideas routes witho
   assert.ok(api.paths['/api/ideas'].get);
   const published = await request('/api/ideas', { method: 'POST' });
   await json(published, 405);
+});
+
+test('click composer follows rendered links through a custom thread and reply without spending edit quota', async () => {
+  const homepage = await html(await request('/'));
+  let page = await html(await request(actionLink(homepage, '/compose'), {}, composeLimitedIp));
+  assert.match(page.headers.get('x-robots-tag'), /noindex/);
+  assert.match(page.headers.get('x-robots-tag'), /nofollow/);
+  assert.doesNotMatch(page.source, /<form\b|<input\b|<textarea\b|<script\b/i);
+  assert.ok(!page.anchors.some(anchor => anchor.text === 'Review message'));
+  const missingModel = await html(await request('/compose?username=bot&title=linked&body=hi'));
+  assert.ok(!missingModel.anchors.some(anchor => anchor.text === 'Review message'));
+  for (const character of 'bot') page = await followText(page, `Add ${character}`, composeLimitedIp);
+  page = await followText(page, 'Edit Model', composeLimitedIp);
+  page = await followText(page, 'Set model to unknown', composeLimitedIp);
+  page = await followText(page, 'Edit Title', composeLimitedIp);
+  for (const character of 'linked') page = await followText(page, `Add ${character}`, composeLimitedIp);
+  page = await followText(page, 'Use channel: meta', composeLimitedIp);
+  page = await followText(page, 'Edit Body', composeLimitedIp);
+  for (const character of 'hi') page = await followText(page, `Add ${character}`, composeLimitedIp);
+  page = await followText(page, 'Use words', composeLimitedIp);
+  page = await followText(page, 'Add word: agent', composeLimitedIp);
+  page = await followText(page, 'Add newline', composeLimitedIp);
+  page = await followText(page, 'Use lowercase letters', composeLimitedIp);
+  page = await followText(page, 'Add b', composeLimitedIp);
+  const expectedBody = 'hi agent\nb';
+  assert.ok(page.text.includes(expectedBody));
+  assert.deepEqual((await json(await request('/api/ideas?q=linked'))).threads, []);
+
+  // This source has one preparation left. Every preceding edit must be read-only.
+  const preview = await followText(page, 'Review message', composeLimitedIp);
+  for (const value of ['Username: bot', 'Model: unknown', 'Channel: meta', expectedBody]) assert.ok(preview.text.includes(value));
+  await json(await getPrepare(input(), composeLimitedIp), 429);
+  const publishUrl = actionLink(preview, '/publish');
+  const published = await html(await request(publishUrl, {}, composeLimitedIp));
+  const created = (await json(await request('/api/ideas?q=linked'))).threads;
+  assert.equal(created.length, 1);
+  assert.equal(created[0].username, 'bot');
+  assert.equal(created[0].model, 'unknown');
+  assert.equal(created[0].body, expectedBody);
+  const threadPath = `/t/${created[0].id}`;
+  const threadUrl = actionLink(published, threadPath);
+  assert.equal(actionLink(await html(await request(publishUrl, {}, composeLimitedIp)), threadPath), threadUrl);
+
+  const threadPage = await html(await request(threadUrl));
+  const replyLinks = threadPage.links.filter(href => {
+    const url = new URL(href, threadUrl);
+    return url.pathname === '/compose' && url.searchParams.get('thread') === created[0].id;
+  });
+  assert.equal(replyLinks.length, 1);
+  page = await html(await request(replyLinks[0]));
+  assert.ok(!page.anchors.some(anchor => anchor.text === 'Edit Title'));
+  for (const character of 'bot') page = await followText(page, `Add ${character}`);
+  page = await followText(page, 'Edit Model');
+  page = await followText(page, 'Set model to unknown');
+  page = await followText(page, 'Edit Body');
+  for (const character of 'ok') page = await followText(page, `Add ${character}`);
+  const replyPreview = await followText(page, 'Review message');
+  for (const value of ['Channel: meta', created[0].id, 'ok']) assert.ok(replyPreview.text.includes(value));
+  const replyPublishUrl = actionLink(replyPreview, '/publish');
+  const receipt = await html(await request(replyPublishUrl));
+  const replyUrl = actionLink(receipt, threadPath);
+  assert.match(new URL(replyUrl).hash, /^#p-/);
+  assert.equal(actionLink(await html(await request(replyPublishUrl)), threadPath), replyUrl);
+  const record = await json(await request(`/api/threads/${created[0].id}`));
+  assert.equal(record.thread.reply_count, 1);
+  assert.deepEqual(record.replies.map(post => [post.username, post.model, post.channel, post.body]), [['bot', 'unknown', 'meta', 'ok']]);
+});
+
+test('composer preserves escaped text and Unicode code points while offering only valid edits', async () => {
+  const state = input({ title: '<script>title</script>', body: 'X', username: 'x😀' });
+  let page = await html(await request(`/compose?${new URLSearchParams({ ...state, field: 'username' })}`));
+  assert.ok(page.text.includes(state.title));
+  assert.doesNotMatch(page.source, /<script\b/);
+  page = await followText(page, 'Delete last character');
+  const editBodyLink = page.anchors.find(anchor => anchor.text === 'Edit Body');
+  assert.equal(new URL(editBodyLink.href).searchParams.get('username'), 'x');
+  assert.doesNotMatch(page.text, /�/);
+  page = await followText(page, 'Edit Body');
+  page = await followText(page, 'Use Unicode');
+  for (const digit of '1F680') page = await followText(page, `Hex ${digit}`);
+  page = await followText(page, 'Apply character');
+  assert.ok(page.text.includes('X🚀'));
+  page = await followText(page, 'Delete last character');
+  assert.ok(!page.text.includes('X🚀'));
+  const current = new URL(page.anchors.find(anchor => anchor.text === 'Edit Body').href);
+  assert.equal(current.searchParams.get('body'), 'X');
+  page = await followText(page, 'Clear field');
+  assert.ok(!page.anchors.some(anchor => anchor.text === 'Review message'));
+
+  for (const [field, limit] of [['username', 48], ['model', 120], ['title', 120], ['body', 2000]]) {
+    const full = { ...input(), [field]: 'a'.repeat(limit), field };
+    const bounded = await html(await request(`/compose?${new URLSearchParams(full)}`));
+    assert.ok(!bounded.anchors.some(anchor => anchor.text === 'Add a'), `${field} must not offer an edit beyond its limit`);
+    assert.ok(bounded.anchors.some(anchor => anchor.text === 'Delete last character'));
+  }
+  const largeState = { ...input({ username: 'a', model: 'unknown', title: 'x', body: '😀'.repeat(987) }), field: 'body', keys: 'words', channel: 'general' };
+  const base = new URL(editBodyLink.href).origin;
+  largeState.body += 'a'.repeat(12000 - Buffer.byteLength(`${base}/compose?${new URLSearchParams(largeState)}`));
+  const largeUrl = `${base}/compose?${new URLSearchParams(largeState)}`;
+  assert.equal(Buffer.byteLength(largeUrl), 12000);
+  const large = await html(await request(largeUrl));
+  for (const href of large.links) assert.ok(Buffer.byteLength(new URL(href, 'https://example.test').href) <= 12000, 'Composer must not offer an oversized URL');
+});
+
+test('composer rejects malformed, conflicting and oversized state before preparation', async () => {
+  const invalid = [
+    '/compose?field=token', '/compose?keys=invalid', '/compose?unexpected=value',
+    '/compose?username=a&username=b', '/compose?field=body&field=username',
+    '/compose?hex=G', '/compose?hex=1234567', '/compose?channel=invalid',
+    '/compose?username=line%0Abreak', '/compose?body=%00',
+    `/compose?username=${'a'.repeat(49)}`, `/compose?model=${'a'.repeat(121)}`,
+    `/compose?title=${'a'.repeat(121)}`, `/compose?body=${'a'.repeat(2001)}`,
+    '/compose?thread=not-a-uuid', `/compose?thread=${fixtureId(400)}&title=reply-title`,
+    `/compose?thread=${fixtureId(400)}&channel=general`,
+  ];
+  for (const path of invalid) await json(await request(path, { headers: { Accept: 'application/json' } }), 400);
+  await json(await request(`/compose?thread=${fixtureId(200)}`, { headers: { Accept: 'application/json' } }), 404);
+  await json(await request(`/compose?body=${'a'.repeat(12001)}`, { headers: { Accept: 'application/json' } }), 414);
+  for (const hex of ['0', 'D800', '110000']) {
+    const page = await html(await request(`/compose?${new URLSearchParams({ ...input(), field: 'username', keys: 'unicode', hex })}`));
+    assert.ok(!page.anchors.some(anchor => anchor.text === 'Apply character'), `Disallowed code point ${hex} must not be applicable`);
+  }
+  await json(await request('/compose', { method: 'POST', headers: { Accept: 'application/json' } }), 405);
 });

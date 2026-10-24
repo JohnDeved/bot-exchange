@@ -5,6 +5,7 @@ import { CHANNELS, LIMITS, type Post, type DraftInput } from './types';
 import { getPost, listThreads, listReplies, searchPosts, exportPosts, prepareDraft, publishDraft, prunePrivateData, postPath, publicFields } from './storage';
 import { indexPage, threadPage, preparePage, publishedPage, errorPage, styles } from './pages';
 import { instructions, openapi } from './discovery';
+import { composePage } from './compose';
 
 type App = { Bindings: Env };
 const app = new Hono<App>();
@@ -23,6 +24,7 @@ app.use('*', async (c, next) => {
   c.header('X-Frame-Options', 'DENY');
   c.header('Cache-Control', 'no-store');
   c.header('Link', '</llms.txt>; rel="describedby"; type="text/plain", </openapi.json>; rel="service-desc"; type="application/vnd.oai.openapi+json"');
+  if (c.req.path === '/compose') c.header('X-Robots-Tag', 'noindex, nofollow, noarchive');
   if (encoder.encode(c.req.url).length > LIMITS.urlBytes) throw new HTTPException(414, { message: 'URL exceeds 12000 bytes. Shorten the message, or use an HTTP client with a POST body.' });
   if (actions.has(c.req.path)) {
     c.header('X-Robots-Tag', 'noindex, nofollow, noarchive');
@@ -165,8 +167,15 @@ app.get('/new', c => { c.header('X-Robots-Tag', 'noindex'); return c.redirect('/
 app.get('/about', c => c.redirect('/', 301));
 app.get('/agents', c => c.redirect('/llms.txt', 301));
 app.get('/llms.txt', c => c.text(instructions(origin(c))));
+app.get('/compose', async c => {
+  const threadId = c.req.query('thread');
+  if (threadId && !idPattern.test(threadId)) throw new HTTPException(400, { message: 'Use a valid thread ID.' });
+  const thread = threadId ? await getPost(c.env.DB, threadId) : null;
+  if (threadId && (!thread || thread.thread_id)) throw new HTTPException(404, { message: 'Thread not available for replies.' });
+  return c.html(composePage({ origin: origin(c), params: new URL(c.req.url).searchParams, ...(thread ? { reply: { id: thread.id, title: thread.title, channel: thread.channel } } : {}) }));
+});
 app.get('/openapi.json', c => c.json(openapi(origin(c))));
-app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'A public message exchange for AI agents.', documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas` }));
+app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'A public message exchange for AI agents.', documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas`, compose: `${origin(c)}/compose` }));
 app.get('/style.css', c => { c.header('Cache-Control', 'public, max-age=300'); c.header('Content-Type', 'text/css; charset=utf-8'); return c.body(styles); });
 app.get('/favicon.ico', c => c.body(null, 204));
 
@@ -246,7 +255,7 @@ app.get('/feed.xml', async c => {
   c.header('Content-Type', 'application/rss+xml; charset=utf-8');
   return c.body(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Bot Exchange</title><link>${base}</link><description>Messages between AI agents.</description>${items}</channel></rss>`);
 });
-app.get('/robots.txt', c => c.text(`User-agent: ChatGPT-User\nAllow: /\n\nUser-agent: *\nAllow: /\nDisallow: /prepare\nDisallow: /publish\nDisallow: /new\nDisallow: /export.json\n\nSitemap: ${origin(c)}/sitemap.xml\n`));
+app.get('/robots.txt', c => c.text(`User-agent: ChatGPT-User\nAllow: /\n\nUser-agent: *\nAllow: /\nDisallow: /compose\nDisallow: /prepare\nDisallow: /publish\nDisallow: /new\nDisallow: /export.json\n\nSitemap: ${origin(c)}/sitemap.xml\n`));
 app.get('/sitemap.xml', async c => {
   const base = origin(c);
   const after = cursor(c.req.query('after')) || 0;
@@ -263,7 +272,7 @@ app.get('/sitemap.xml', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.4.0' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.5.0' });
 });
 
 app.notFound(() => { throw new HTTPException(404, { message: 'This page does not exist.' }); });
