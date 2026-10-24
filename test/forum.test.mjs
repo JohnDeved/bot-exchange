@@ -175,6 +175,54 @@ const postJson = (path, data, source) => request(path, { method: 'POST', headers
 const postForm = (path, data, source) => request(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(data).toString() }, source);
 const getPrepare = (data, source) => request(`/prepare?${new URLSearchParams({ format: 'json', ...data })}`, {}, source);
 
+test('domain migration preserves public URLs and existing publication flows', async t => {
+  // Unlike unstable_dev, the harness preserves the requested hostname.
+  const { createTestHarness } = await import('wrangler');
+  const server = createTestHarness({ workers: [{ configPath: join(root, 'wrangler.jsonc'), secrets: { INDEXNOW_KEY: indexNowKey } }] });
+  t.after(() => server.close());
+  await server.listen();
+  await server.getWorker().applyD1Migrations('DB');
+  const request = (url, init = {}) => server.fetch(url, { ...init, headers: { 'CF-Connecting-IP': '203.0.113.90', 'User-Agent': 'BotExchangeIntegrationTest/1.0', ...init.headers } });
+  const oldOrigin = 'http://bot-exchange.b-j.dev';
+  const newOrigin = 'http://bot-exchange.objekt.stream';
+  const redirectOrigin = 'https://bot-exchange.objekt.stream';
+  for (const path of ['/', '/agents?fresh=migration', '/compose?body=one%20two%2Bthree', `/t/${fixtureId(1)}?after=2`, '/api/threads?channel=meta', '/robots.txt', '/sitemap.xml']) {
+    const response = await status(await request(oldOrigin + path, { redirect: 'manual' }), 308);
+    assert.equal(response.headers.get('location'), redirectOrigin + path);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+  }
+  const head = await status(await request(oldOrigin + '/agents', { method: 'HEAD', redirect: 'manual' }), 308);
+  assert.equal(head.headers.get('location'), redirectOrigin + '/agents');
+  assert.equal(await head.text(), '');
+  for (const path of ['/style.css', '/favicon.svg', '/dither-forest.svg', '/dither-paper.svg', '/fonts/silkscreen-v1.ttf', '/fonts/pixel-operator-v1.ttf', '/fonts/pixel-operator-bold-v1.ttf']) {
+    const asset = await status(await request(oldOrigin + path, { redirect: 'manual' }), 200);
+    assert.equal(asset.headers.get('location'), null, 'Old previews need same-origin assets');
+  }
+  const guide = await html(await request(newOrigin + '/agents', { redirect: 'manual' }));
+  assert.ok(guide.source.includes(`rel="canonical" href="${newOrigin}/agents"`));
+  assert.ok(guide.source.includes(`${newOrigin}/compose`));
+  assert.ok(!guide.source.includes(oldOrigin));
+
+  const data = input({ title: 'Domain migration fixture', body: 'Existing previews remain usable across the move.' });
+  const preview = await json(await request(oldOrigin + '/prepare', {
+    method: 'POST', redirect: 'manual',
+    headers: { 'Content-Type': 'application/json', Origin: oldOrigin, 'Sec-Fetch-Site': 'same-origin' },
+    body: JSON.stringify(data),
+  }, '203.0.113.90'));
+  assert.equal(new URL(preview.preview.publish_url).origin, oldOrigin);
+  const publication = await json(await request(preview.preview.publish_url, { redirect: 'manual' }, '203.0.113.90'), 201);
+  assert.equal(publication.post.body, data.body);
+  const replayUrl = new URL(preview.preview.publish_url);
+  replayUrl.host = new URL(newOrigin).host;
+  const replay = await json(await request(replayUrl.href, { redirect: 'manual' }, '203.0.113.90'));
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.post.id, publication.post.id);
+  const publicPage = await html(await request(newOrigin + `/t/${publication.post.id}`));
+  assert.ok(publicPage.source.includes(data.body));
+  await status(await request(oldOrigin + '/prepare', { method: 'HEAD', redirect: 'manual' }), 405);
+  await status(await request(oldOrigin + '/prepare', { method: 'POST', redirect: 'manual', headers: { Origin: newOrigin } }), 403);
+});
+
 test('IndexNow ownership is read-only, exact-path and absent from discovery', async () => {
   const path = `/${indexNowKey}.txt`;
   const response = await status(await request(path), 200);

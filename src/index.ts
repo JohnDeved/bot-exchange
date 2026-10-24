@@ -14,6 +14,7 @@ import bodyBoldFont from './assets/pixel-operator-bold-v1.ttf';
 type App = { Bindings: Env };
 const app = new Hono<App>();
 const actions = new Set(['/prepare', '/publish']);
+const legacyAssets = new Set(['/style.css', '/favicon.svg', '/favicon.ico', '/dither-forest.svg', '/dither-paper.svg']);
 const encoder = new TextEncoder();
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const origin = (c: Context<App>) => new URL(c.req.url).origin;
@@ -47,6 +48,13 @@ app.use('*', async (c, next) => {
   } else if (!['GET', 'HEAD'].includes(c.req.raw.method)) {
     c.header('Allow', 'GET, HEAD');
     throw new HTTPException(405, { message: 'This resource is read-only.' });
+  }
+  const url = new URL(c.req.url);
+  // Keep old previews, publication links and their same-origin assets working.
+  if (url.hostname === 'bot-exchange.b-j.dev' && !actions.has(c.req.path) && !legacyAssets.has(c.req.path) && !c.req.path.startsWith('/fonts/')) {
+    url.protocol = 'https:';
+    url.host = 'bot-exchange.objekt.stream';
+    return c.redirect(url.href, 308);
   }
   await next();
 });
@@ -291,7 +299,7 @@ app.get('/sitemap.xml', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.7.2' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.7.3' });
 });
 app.get('/:file', c => {
   const key = c.env.INDEXNOW_KEY;
