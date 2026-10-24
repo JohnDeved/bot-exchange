@@ -644,3 +644,49 @@ test('composer rejects malformed, conflicting and oversized state before prepara
   }
   await json(await request('/compose', { method: 'POST', headers: { Accept: 'application/json' } }), 405);
 });
+
+test('fresh read links change per render and preserve filtered thread, idea and reply pagination', async () => {
+  const threads = await json(await request('/api/threads?q=Paginationfixture&channel=experiments'));
+  const ideas = await json(await request('/api/ideas?q=Ideafixturetoken'));
+  const replies = await json(await request(`/api/threads/${fixtureId(100)}`));
+  const cases = [
+    { path: '/', params: { q: 'Paginationfixture', channel: 'experiments', cursor: String(threads.next_cursor) }, visible: [fixtureId(1), fixtureId(2)], absent: fixtureId(22) },
+    { path: '/ideas', params: { q: 'Ideafixturetoken', cursor: String(ideas.next_cursor) }, visible: [fixtureId(400), fixtureId(401)], absent: fixtureId(421) },
+    { path: `/t/${fixtureId(100)}`, params: { cursor: String(replies.next_cursor) }, visible: [fixtureId(121), fixtureId(122)], absent: fixtureId(101) },
+  ];
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  for (const example of cases) {
+    const path = `${example.path}?${new URLSearchParams(example.params)}`;
+    const first = await html(await request(path));
+    const second = await html(await request(path));
+    const link = (page, label) => {
+      const matches = page.anchors.filter(anchor => anchor.text === label);
+      assert.equal(matches.length, 1, `Expected one ${label} link`);
+      assert.match(matches[0].href, /^https?:\/\//);
+      return new URL(matches[0].href);
+    };
+    for (const [label, pathname] of [['Read latest threads', '/'], ['Read latest ideas', '/ideas'], ['Refresh this page', example.path]]) {
+      const before = link(first, label);
+      const after = link(second, label);
+      assert.equal(before.pathname, pathname);
+      assert.match(before.searchParams.get('fresh'), uuid);
+      assert.match(after.searchParams.get('fresh'), uuid);
+      assert.notEqual(before.searchParams.get('fresh'), after.searchParams.get('fresh'));
+      const agentInterface = first.source.match(/<p class="agent-interface">[\s\S]*?<\/p>/)?.[0];
+      assert.ok(agentInterface?.includes(label));
+      assert.ok(!first.source.replace(agentInterface, '').includes(label), `${label} must remain inside agent discovery`);
+    }
+    const refresh = link(first, 'Refresh this page');
+    const retained = new URLSearchParams(refresh.search);
+    retained.delete('fresh');
+    assert.deepEqual(Object.fromEntries(retained), example.params);
+    const canonical = page => decodeHtml(page.source.match(/<link rel="canonical" href="([^"]+)"/)?.[1] || '');
+    assert.equal(canonical(first), canonical(second));
+    assert.equal(new URL(canonical(first)).searchParams.has('fresh'), false);
+    const refreshed = await html(await request(refresh.href));
+    for (const id of example.visible) assert.ok(refreshed.source.includes(id), `Refresh is missing ${id}`);
+    assert.ok(!refreshed.source.includes(example.absent), 'Refresh must retain the current page');
+    assert.equal((refreshed.source.match(/<form\b/g) || []).length, example.path.startsWith('/t/') ? 0 : 1);
+    assert.doesNotMatch(refreshed.source, /<textarea\b|<form[^>]+method="post"|<form[^>]+action="\/(?:prepare|publish)"/i);
+  }
+});

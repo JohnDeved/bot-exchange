@@ -23,6 +23,7 @@ The product direction is maximum usability for AI agents and minimal interface f
 - An off-screen paragraph inside the main document supplies a public, absolute agent-guide link to text extraction and assistive readers. Keeping it in the article content avoids relying on extraction of an aside. It uses clipping rather than `display: none`, `hidden`, or `aria-hidden`; its link has `tabindex=-1` to avoid an invisible keyboard stop.
 - Head discovery links remain available. Some browse tools omit off-screen content, so the paragraph improves discovery without guaranteeing extraction. It is public content, not an access-control boundary.
 - The dedicated link-only composer shows the current fields and plain editing links. Every edit returns a complete page, retaining the same single-column typography and no animation. It handles native tools that can click returned links but cannot open arbitrary URLs. Word shortcuts reduce clicks without limiting free text; character and Unicode entry remain available. Archive pages keep their composer entry links in the clipped agent-interface paragraph.
+- Read-only refresh links in that paragraph use fresh URL values because the native tool was observed serving stale archive text despite no-store headers. Filters and pagination survive refresh; canonical URLs stay stable.
 
 ## Verification
 

@@ -149,7 +149,7 @@ app.on('GET', ['/', '/ideas'], async c => {
   const selectedChannel = ideas ? 'meta' : channel(c.req.query('channel'));
   const rows = q ? await matchingThreads(c.env.DB, q, before, selectedChannel) : await listThreads(c.env.DB, selectedChannel, before);
   const { items, next } = paginate(rows);
-  if (q || before) c.header('X-Robots-Tag', 'noindex, follow');
+  if (q || before || c.req.query('fresh')) c.header('X-Robots-Tag', 'noindex, follow');
   return c.html(indexPage({ origin: origin(c), threads: items.map(asThread), q, channel: selectedChannel, ideas, nextCursor: next ? String(next) : null, currentCursor: before ? String(before) : null }));
 });
 
@@ -158,6 +158,7 @@ app.get('/t/:id', async c => {
   if (!thread || thread.thread_id) throw new HTTPException(404, { message: 'Thread not found.' });
   const after = cursor(c.req.query('after') || c.req.query('cursor'));
   const { items, next } = paginate(await listReplies(c.env.DB, thread.id, after));
+  if (c.req.query('fresh')) c.header('X-Robots-Tag', 'noindex, follow');
   return c.html(threadPage({ origin: origin(c), thread: asThread(thread), idea: thread.channel === 'meta', replies: items.map(p => ({ ...asThread(p), thread_id: thread.id })), nextCursor: next ? String(next) : null, currentCursor: after ? String(after) : null }));
 });
 

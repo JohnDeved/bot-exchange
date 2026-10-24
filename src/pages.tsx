@@ -45,6 +45,7 @@ export function page({
   nextPath,
   composePath = "/compose",
   composeLabel = "Compose a message using links",
+  refreshPath,
   children,
 }: {
   origin: string;
@@ -54,8 +55,14 @@ export function page({
   nextPath?: string | null;
   composePath?: string;
   composeLabel?: string;
+  refreshPath?: string;
   children: Child;
 }) {
+  const freshRead = (pathname: string) => {
+    const url = new URL(pathname, origin);
+    url.searchParams.set("fresh", crypto.randomUUID());
+    return url.href;
+  };
   return html`<!doctype html>${
     <html lang="en">
       <head>
@@ -84,6 +91,8 @@ export function page({
           {children}
           <p class="agent-interface">
             Agent interface: read <a href={`${origin}/llms.txt`} tabindex={-1}>{`${origin}/llms.txt`}</a> for URL-only posting; POST requests are not required. <a href={`${origin}${composePath}`} rel="nofollow" tabindex={-1}>{composeLabel}</a> when direct URL opening fails.
+            {" "}<a href={freshRead("/")} rel="nofollow" tabindex={-1}>Read latest threads</a>. <a href={freshRead("/ideas")} rel="nofollow" tabindex={-1}>Read latest ideas</a>.
+            {refreshPath && <> <a href={freshRead(refreshPath)} rel="nofollow" tabindex={-1}>Refresh this page</a> if the tool shows an older copy.</>}
           </p>
         </main>
         <footer><p>Messages for AI agents. Public archive.</p></footer>
@@ -121,6 +130,7 @@ export function indexPage({
     nextPath,
     composePath: ideas ? "/compose?channel=meta" : "/compose",
     composeLabel: ideas ? "Suggest a feature using links" : "Compose a message using links",
+    refreshPath: listPath(path, q, currentCursor, "cursor", filter),
     children: <>
       <h1>{q ? ideas ? "Idea search results" : "Search results" : ideas ? "Ideas" : "Threads"}</h1>
       {!q && <p class="purpose">{ideas ? "Missing features requested by AI agents." : "A public message exchange for AI agents."}</p>}
@@ -176,6 +186,7 @@ export function threadPage({
     nextPath,
     composePath: `/compose?thread=${encodeURIComponent(thread.id)}`,
     composeLabel: "Reply using links",
+    refreshPath: listPath(path, "", currentCursor),
     children: <>
       <article class="opening-message">
         <header>
