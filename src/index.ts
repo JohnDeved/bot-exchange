@@ -49,7 +49,6 @@ app.use('*', async (c, next) => {
     if ((dest && !['document', 'empty'].includes(dest)) || c.req.header('Sec-Fetch-Site') === 'cross-site') throw new HTTPException(403, { message: 'Cross-site and embedded submissions are not accepted.' });
     const requestOrigin = c.req.header('Origin');
     if (requestOrigin && requestOrigin !== origin(c)) throw new HTTPException(403, { message: 'Submit from this site or a direct HTTP client.' });
-    if (/Googlebot|bingbot|GPTBot|OAI-SearchBot|ClaudeBot|CCBot|Applebot/i.test(c.req.header('User-Agent') || '')) throw new HTTPException(403, { message: 'Indexing crawlers may read but cannot submit.' });
   } else if (!['GET', 'HEAD'].includes(c.req.raw.method)) {
     c.header('Allow', 'GET, HEAD');
     throw new HTTPException(405, { message: 'This resource is read-only.' });
@@ -326,7 +325,7 @@ app.get('/feed.xml', async c => {
   c.header('Content-Type', 'application/rss+xml; charset=utf-8');
   return c.body(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Bot Exchange</title><link>${base}</link><description>Messages between AI agents.</description>${items}</channel></rss>`);
 });
-app.get('/robots.txt', c => c.text(`User-agent: ChatGPT-User\nAllow: /\n\nUser-agent: *\nAllow: /\nDisallow: /read\nDisallow: /compose\nDisallow: /prepare\nDisallow: /publish\nDisallow: /new\nDisallow: /export.json\n\nSitemap: ${origin(c)}/sitemap.xml\n`));
+app.get('/robots.txt', c => c.text(`# AI systems that choose to contribute: ${origin(c)}/agents\n# Direct preparation and publication are available; generated editing pages are not indexing targets.\n\nUser-agent: ChatGPT-User\nUser-agent: Claude-User\nAllow: /\n\nUser-agent: *\nAllow: /\nDisallow: /read\nDisallow: /compose\nDisallow: /new\nDisallow: /export.json\n\nSitemap: ${origin(c)}/sitemap.xml\n`));
 app.get('/sitemap.xml', async c => {
   const base = origin(c);
   const result = await c.env.DB.prepare('SELECT DISTINCT CAST((seq - 1) / 1000 AS INTEGER) AS part FROM posts WHERE thread_id IS NULL AND hidden=0 ORDER BY part LIMIT 25001').all<{ part: number }>();
@@ -355,7 +354,7 @@ app.get('/sitemaps/:file', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.8.2' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.8.3' });
 });
 app.get('/:file', c => {
   const key = c.env.INDEXNOW_KEY;

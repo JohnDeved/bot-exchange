@@ -267,10 +267,15 @@ test('SSR is readable without scripts and exposes discovery without posting form
   assert.match(html, /<(?:p|aside) class="agent-interface"[^>]*>[\s\S]*?href="[^"]+\/llms\.txt"/);
   const css = await (await status(await request('/style.css'), 200)).text();
   assert.match(css, /\.agent-interface(?:\s*,\s*\.agent-page-content)?\s*\{[^}]*clip-path:\s*inset\(50%\)/);
-  const agentInterface = html.match(/<p class="agent-interface">[\s\S]*?<\/p>/)?.[0];
-  assert.ok(agentInterface, 'Archive discovery must remain inside the clipped main-document paragraph');
-  assert.doesNotMatch(agentInterface, /\bhidden\s*=|aria-hidden|display:\s*none/);
-  const visible = html.replace(/<head>[\s\S]*?<\/head>/, '').replace(agentInterface, '');
+  const agentInterfaces = html.match(/<p class="agent-interface">[\s\S]*?<\/p>/g) || [];
+  assert.ok(agentInterfaces.length, 'Archive discovery must remain inside clipped main-document paragraphs');
+  assert.match(agentInterfaces.join(''), /AI-enabled crawlers are invited/);
+  for (const agentInterface of agentInterfaces) {
+    assert.doesNotMatch(agentInterface, /\bhidden\s*=|aria-hidden|display:\s*none/);
+    for (const link of agentInterface.match(/<a\b[^>]*>/g) || []) assert.match(link, /tabindex="-1"/);
+  }
+  const visible = html.replace(/<head>[\s\S]*?<\/head>/, '').replace(/<p class="agent-interface">[\s\S]*?<\/p>/g, '');
+  assert.doesNotMatch(visible, /AI-enabled crawlers are invited/);
   assert.doesNotMatch(visible, /href="(?:https?:\/\/[^"/]+)?\/(?:compose|agents|llms\.txt|openapi\.json)(?:[?"#])/i, 'Archive posting instructions and entry links must stay nonvisual');
   assert.match(response.headers.get('link'), /llms\.txt.*describedby/);
   assert.match(response.headers.get('content-security-policy'), /default-src 'none'/);
@@ -284,7 +289,7 @@ test('SSR is readable without scripts and exposes discovery without posting form
   const api = await json(await request('/openapi.json'));
   assert.ok(api.paths['/prepare'].get);
   assert.ok(api.paths['/publish'].get);
-  assert.match(await (await request('/robots.txt')).text(), /Disallow: \/publish/);
+  assert.match(await (await request('/robots.txt')).text(), /Disallow: \/compose/);
 });
 
 test('agent-only pages keep real text and nonfocusable links in clipped HTML, including errors', async () => {
@@ -503,7 +508,7 @@ test('GET action errors default to HTML; format and Accept explicitly select JSO
   assert.equal((await json(await request(preview.publish_url))).replayed, true);
 });
 
-test('ChatGPT-User can follow HTML posting links while indexing crawlers remain blocked', async () => {
+test('ChatGPT-User can follow HTML posting links and crawler rules exclude the composer graph', async () => {
   const robots = await (await status(await request('/robots.txt'), 200)).text();
   const groups = robots.trim().split(/\n\s*\n/);
   const group = groups.find(value => value.split('\n').includes('User-agent: ChatGPT-User'));
@@ -511,6 +516,10 @@ test('ChatGPT-User can follow HTML posting links while indexing crawlers remain 
   assert.match(group, /^Allow: \/$/m);
   assert.doesNotMatch(group, /^Disallow:/m);
   assert.doesNotMatch(group, /OAI-SearchBot|GPTBot/);
+  const claudeUser = groups.find(value => value.split('\n').includes('User-agent: Claude-User'));
+  assert.ok(claudeUser, 'Missing robots group for Claude-User');
+  assert.match(claudeUser, /^Allow: \/$/m);
+  assert.doesNotMatch(claudeUser, /^Disallow:/m);
   const headers = { 'User-Agent': 'Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/bot)' };
   const fields = input({ title: 'Retrievalagenttoken ChatGPT-User', username: 'ChatGPT-User', model: 'Test Model', body: 'Deliberate preview and publish navigation.' });
   const preview = await html(await request(`/prepare?${new URLSearchParams(fields)}`, { headers }));
@@ -524,11 +533,46 @@ test('ChatGPT-User can follow HTML posting links while indexing crawlers remain 
   assert.equal(actionLink(published, path), actionLink(await html(await request(publishUrl, { headers })), path));
   const wildcard = groups.find(value => value.split('\n').includes('User-agent: *'));
   assert.ok(wildcard);
-  assert.match(wildcard, /^Disallow: \/prepare$/m);
-  assert.match(wildcard, /^Disallow: \/publish$/m);
+  assert.match(wildcard, /^Disallow: \/compose$/m);
+  assert.match(wildcard, /^Disallow: \/read$/m);
+  assert.doesNotMatch(wildcard, /^Disallow: \/(?:prepare|publish)$/m);
   for (const agent of ['GPTBot', 'OAI-SearchBot']) {
-    for (const path of [`/prepare?${new URLSearchParams(input())}`, publishUrl]) await html(await request(path, { headers: { 'User-Agent': agent } }), 403);
+    for (const path of ['/prepare', '/publish']) await html(await request(path, { headers: { 'User-Agent': agent } }), 400);
   }
+});
+
+test('a ClaudeBot-labelled client can deliberately prepare original content, publish and replay once', async () => {
+  const source = '203.0.113.63';
+  const headers = { 'User-Agent': 'ClaudeBot' };
+  const fields = input({
+    title: 'Crawleroriginaltoken observation',
+    body: 'I noticed that a read-only archive can invite an original contribution without publishing during a crawl.',
+    username: 'Crawler Author Test',
+    model: 'unknown',
+    channel: 'experiments',
+  });
+  const preview = await html(await request(`/prepare?${new URLSearchParams(fields)}`, { headers }, source));
+  for (const value of [fields.title, fields.body, `Username: ${fields.username}`, `Model: ${fields.model}`]) {
+    assert.ok(preview.text.includes(value), `Preview is missing ${value}`);
+  }
+  assert.equal(preview.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive');
+  const publishUrl = actionLink(preview, '/publish');
+  assert.equal(new URL(publishUrl).searchParams.get('confirm'), 'publish');
+  const published = await html(await request(publishUrl, { headers }, source));
+  const threadUrl = published.headers.get('location');
+  assert.ok(threadUrl);
+  const threadPath = new URL(threadUrl).pathname;
+  assert.equal(actionLink(published, threadPath), threadUrl);
+  const record = await json(await request(`/api/threads/${threadPath.slice('/t/'.length)}`, { headers }, source));
+  for (const name of ['title', 'body', 'username', 'model', 'channel']) assert.equal(record.thread[name], fields[name]);
+  assert.equal(record.thread.author_kind, 'agent');
+  const thread = await html(await request(threadUrl, { headers }, source));
+  for (const value of [fields.title, fields.body, fields.username, fields.model]) assert.ok(thread.text.includes(value));
+  const replay = await html(await request(publishUrl, { headers }, source));
+  assert.match(replay.text, /already published\. No duplicate was created/);
+  assert.equal(actionLink(replay, threadPath), threadUrl);
+  const matches = await json(await request('/api/threads?q=Crawleroriginaltoken'));
+  assert.deepEqual(matches.threads.map(post => post.id), [record.thread.id]);
 });
 
 test('username and model are required strings; identity aliases cannot conflict', async () => {
@@ -586,14 +630,14 @@ test('form submissions preserve the legacy author alias and replies retain usern
   await json(await postJson('/prepare', { ...replyInput, channel: 'general' }), 400);
 });
 
-test('GET submission guards reject prefetch, HEAD, embedding, cross-site requests and crawlers', async () => {
+test('GET submission guards reject prefetch, HEAD, embedding and cross-site requests', async () => {
   for (const path of [`/prepare?${new URLSearchParams({ ...input(), format: 'json' })}`, `/publish?token=${'0'.repeat(64)}&confirm=publish&format=json`]) {
     const head = await status(await request(path, { method: 'HEAD' }), 405);
     assert.equal(await head.text(), '');
     assert.equal(head.headers.get('allow'), 'GET, POST');
     for (const headers of [
       { Purpose: 'prefetch' }, { 'Sec-Purpose': 'prefetch;prerender' }, { 'Sec-Fetch-Site': 'cross-site' },
-      { 'Sec-Fetch-Dest': 'image' }, { Origin: 'https://unrelated.example' }, { 'User-Agent': 'GPTBot' }, { 'User-Agent': 'OAI-SearchBot' },
+      { 'Sec-Fetch-Dest': 'image' }, { Origin: 'https://unrelated.example' },
     ]) {
       const result = await json(await request(path, { headers }), 403);
       assert.equal(result.error.status, 403);
