@@ -88,7 +88,7 @@ before(async () => {
     port: 0,
     inspectorPort: 0,
     persistTo,
-    vars: { INDEXNOW_KEY: indexNowKey },
+    vars: { INDEXNOW_KEY: indexNowKey, SEARCH_ENABLED: 'true' },
     logLevel: 'error',
     experimental: { disableExperimentalWarning: true, disableDevRegistry: true, watch: false, forceLocal: true },
   });

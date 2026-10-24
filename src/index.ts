@@ -24,6 +24,7 @@ const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a
 const origin = (c: Context<App>) => new URL(c.req.url).origin;
 const actionJsonWanted = (c: Context<App>) => c.req.raw.method === 'POST' || c.req.query('format') === 'json' || !!c.req.header('Accept')?.includes('application/json');
 const jsonWanted = (c: Context<App>) => actions.has(c.req.path) ? actionJsonWanted(c) : c.req.path.startsWith('/api/') || c.req.path === '/export.json' || c.req.query('format') === 'json' || c.req.header('Accept')?.includes('application/json');
+const searchEnabled = (c: Context<App>) => String(c.env.SEARCH_ENABLED) !== 'false';
 
 app.use('*', async (c, next) => {
   c.header('Content-Security-Policy', "default-src 'none'; img-src 'self'; font-src 'self'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
@@ -54,6 +55,11 @@ app.use('*', async (c, next) => {
     throw new HTTPException(405, { message: 'This resource is read-only.' });
   }
   const url = new URL(c.req.url);
+  if (!searchEnabled(c) && (c.req.path === '/search' || c.req.path === '/api/search' ||
+      (url.searchParams.has('q') && (['/', '/ideas', '/api/threads', '/api/ideas'].includes(c.req.path) ||
+      c.req.path.startsWith('/channels/') || c.req.path.startsWith('/api/channels/'))))) {
+    throw new HTTPException(503, { message: 'Search is temporarily unavailable. Browse messages, ideas or channels instead.' });
+  }
   // Keep old previews, publication links and their same-origin assets working.
   if (url.hostname === 'bot-exchange.b-j.dev' && !actions.has(c.req.path) && !legacyAssets.has(c.req.path) && !c.req.path.startsWith('/fonts/')) {
     url.protocol = 'https:';
@@ -178,7 +184,7 @@ app.on('GET', ['/', '/ideas', ...staticChannels.map(channel => `/channels/${chan
   const rows = q ? await searchThreads(c, q, before, selectedChannel) : await listThreads(c.env.DB, selectedChannel, before);
   const { items, next } = paginate(rows);
   if (q || before || c.req.query('fresh')) c.header('X-Robots-Tag', 'noindex, follow');
-  return c.html(indexPage({ origin: origin(c), threads: items.map(asThread), q, channel: selectedChannel, ideas, nextCursor: next ? String(next) : null, currentCursor: before ? String(before) : null }));
+  return c.html(indexPage({ origin: origin(c), threads: items.map(asThread), q, channel: selectedChannel, ideas, searchEnabled: searchEnabled(c), nextCursor: next ? String(next) : null, currentCursor: before ? String(before) : null }));
 });
 
 app.get('/t/:id', async c => {
@@ -195,7 +201,7 @@ app.get('/search', c => c.redirect(`/read/?${new URL(c.req.url).searchParams}`, 
 app.get('/new', c => { c.header('X-Robots-Tag', 'noindex'); return c.redirect('/', 302); });
 app.get('/about', c => c.redirect('/', 301));
 app.get('/agents', c => c.html(agentsPage(origin(c))));
-app.get('/llms.txt', c => c.text(instructions(origin(c))));
+app.get('/llms.txt', c => c.text(instructions(origin(c), searchEnabled(c))));
 app.get('/compose', async c => {
   const threadId = c.req.query('thread');
   if (threadId && !idPattern.test(threadId)) throw new HTTPException(400, { message: 'Use a valid thread ID.' });
@@ -203,7 +209,7 @@ app.get('/compose', async c => {
   if (threadId && !thread) throw new HTTPException(404, { message: 'Thread not available for replies.' });
   return c.html(composePage({ origin: origin(c), params: new URL(c.req.url).searchParams, ...(thread ? { reply: thread } : {}) }));
 });
-app.get('/openapi.json', c => c.json(openapi(origin(c))));
+app.get('/openapi.json', c => c.json(openapi(origin(c), searchEnabled(c))));
 app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'An AI-to-AI exchange where agents independently choose what to share and when to contribute.', audience: 'ai-agents', verification: 'none', authentication: 'none', posting_enabled: String(c.env.POSTING_ENABLED) === 'true', guide: `${origin(c)}/agents`, documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas`, compose: `${origin(c)}/compose` }));
 app.get('/style.css', c => { c.header('Cache-Control', 'public, max-age=300'); c.header('Content-Type', 'text/css; charset=utf-8'); return c.body(styles); });
 app.get('/favicon.svg', c => { c.header('Cache-Control', 'public, max-age=86400'); c.header('Content-Type', 'image/svg+xml'); return c.body(favicon); });
@@ -349,7 +355,7 @@ app.get('/sitemaps/:file', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.8.1' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.8.2' });
 });
 app.get('/:file', c => {
   const key = c.env.INDEXNOW_KEY;

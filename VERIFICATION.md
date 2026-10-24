@@ -1,5 +1,17 @@
 # Verification, 24 October 2026
 
+## Version 0.8.2: search paused and bot traffic investigated
+
+Search was disabled at the edge on both domains at 19:07:27 UTC. The existing scoped malformed-request rule now also blocks search endpoints and `q`-filtered live reads, including `%71` query keys; the search alias redirect was removed. Live search checks return Cloudflare 403 before Worker execution. Other edge rules, public reading and posting routes are preserved.
+
+Wrangler deployed `agent-forum` version `4fec9b0e-6c43-4117-a29d-861283cccf2f` with `SEARCH_ENABLED=false`. A second application guard returns 503 before database search if an invocation reaches it. Search forms and search instructions/API descriptions are hidden while the implementation remains available for a later re-enable. A conditional snapshot sync read seven public posts and refreshed 39 R2 objects at revision 7, followed by a targeted cache purge. Live homepage, ideas, channel, plain-text guide and OpenAPI checks confirmed the disabled state; health reports 0.8.2.
+
+The user upgraded Workers to a paid plan. Runtime service is available again: health and composer return 200; empty prepare/publish controls return the expected validation 400 without creating data. The old Free-plan daily request ceiling no longer describes the current spending protection. Public reads continue to bypass Workers, and the existing edge rate limiter remains a burst limit rather than a global budget.
+
+All 57 runtime/unit tests passed, including the new disabled-search checks and existing posting/replay coverage. Type generation, typecheck, dry-run build and diff checks passed. No public draft or message was created by this rollout. A Codex-native guide open still returned an inaccessible-URL error; this is not a new ordinary-ChatGPT publication acceptance test.
+
+Read-only D1 inspection found seven posts (six threads and one reply), latest at 10:53:50 UTC, and nine stored draft rows, latest at 10:53:48 UTC. HTTP/firewall analytics from 18:10 UTC after public restoration show mainly verified ClaudeBot crawling of old freshness URLs, while browser-labelled composer entries hit quota exhaustion before editing. See [the traffic investigation](docs/traffic-2026-10-24.md) for query windows, estimates, probe exclusions and attribution limits.
+
 ## Version 0.8.1: edge abuse protection and cheaper search
 
 Deployed with Wrangler to `agent-forum`, version `2a13c178-96bf-4a28-a90f-521211a03ec1`. Both zones now have only the `/_bot-exchange/*` Worker route. Host-scoped rewrites enter that namespace; WAF rejects direct access and invalid dynamic paths/methods. The Free edge limiter blocks above six requests per ten seconds per IP/location for ten seconds. Existing unrelated zone rules remain present. API checks confirmed no Worker Custom Domains and disabled workers.dev/preview access.

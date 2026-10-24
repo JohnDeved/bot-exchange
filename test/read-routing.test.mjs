@@ -11,6 +11,7 @@ const temporary = mkdtempSync(join(tmpdir(), 'bot-exchange-read-test-'));
 const persistTo = join(temporary, 'state');
 const id = '00000000-0000-4000-8000-000000000001';
 let worker;
+let searchDisabledWorker;
 
 process.env.WRANGLER_SEND_METRICS = 'false';
 process.env.WRANGLER_LOG_PATH = join(temporary, 'wrangler.log');
@@ -30,12 +31,38 @@ before(async () => {
   const { unstable_dev } = await import('wrangler');
   worker = await unstable_dev(join(root, 'src/index.ts'), {
     config: join(root, 'wrangler.jsonc'), local: true, ip: '127.0.0.1', port: 0,
-    inspectorPort: 0, persistTo, vars: { INDEXNOW_KEY: '0'.repeat(32) }, logLevel: 'error',
+    inspectorPort: 0, persistTo, vars: { INDEXNOW_KEY: '0'.repeat(32), SEARCH_ENABLED: 'true' }, logLevel: 'error',
+    experimental: { disableExperimentalWarning: true, disableDevRegistry: true, watch: false, forceLocal: true },
+  });
+  searchDisabledWorker = await unstable_dev(join(root, 'src/index.ts'), {
+    config: join(root, 'wrangler.jsonc'), local: true, ip: '127.0.0.1', port: 0,
+    inspectorPort: 0, persistTo, vars: { INDEXNOW_KEY: '0'.repeat(32), SEARCH_ENABLED: 'false' }, logLevel: 'error',
     experimental: { disableExperimentalWarning: true, disableDevRegistry: true, watch: false, forceLocal: true },
   });
 }, { timeout: 120000 });
 
-after(async () => worker?.stop());
+after(async () => Promise.all([worker?.stop(), searchDisabledWorker?.stop()]));
+
+test('search can be paused while browsing and composition remain available', async () => {
+  for (const path of ['/search', '/api/search', '/api/search?q=fixture', '/read/api/search?q=fixture', '/?q=fixture', '/ideas?q=', '/read/channels/general?q=fixture', '/read/api/channels/general?q=fixture', '/_bot-exchange/read/api/ideas?q=fixture']) {
+    const response = await searchDisabledWorker.fetch(path);
+    assert.equal(response.status, 503, path);
+    assert.match(await response.text(), /Search is temporarily unavailable/);
+  }
+  for (const path of ['/', '/ideas', '/channels/general', '/read/', '/read/api/threads', '/compose']) {
+    const response = await searchDisabledWorker.fetch(path);
+    assert.equal(response.status, 200, path);
+    const text = await response.text();
+    assert.doesNotMatch(text, /role="search"/);
+  }
+  const schema = await (await searchDisabledWorker.fetch('/openapi.json')).json();
+  assert.equal(schema.paths['/read/api/search'], undefined);
+  for (const item of Object.values(schema.paths)) {
+    assert.ok(!item.get?.parameters?.some(parameter => parameter.name === 'q'));
+  }
+  const guide = await (await searchDisabledWorker.fetch('/llms.txt')).text();
+  assert.match(guide, /Search is temporarily unavailable/);
+});
 
 test('edge namespace preserves native links, search parameters and action methods', async () => {
   const compose = await worker.fetch('/_bot-exchange/compose?body=hello&username=agent&model=unknown');

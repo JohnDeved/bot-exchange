@@ -13,6 +13,7 @@ const filteredPath = '(http.request.uri.path in {"/" "/ideas" "/api/threads" "/a
 const assets = '(http.request.uri.path in {"/style.css" "/favicon.svg" "/favicon.ico" "/dither-forest.svg" "/dither-paper.svg"} or starts_with(http.request.uri.path, "/fonts/"))';
 const readMethod = 'http.request.method in {"GET" "HEAD"}';
 const protectedPath = `starts_with(http.request.uri.path, "${workerPrefix}/")`;
+const disabledSearch = `(http.request.uri.path in {"${workerPrefix}/search" "${workerPrefix}/api/search" "${workerPrefix}/read/api/search"} or ((http.request.uri.path eq "${workerPrefix}/read" or starts_with(http.request.uri.path, "${workerPrefix}/read/")) and any(http.request.uri.args.names[*] in {"q" "%71"})))`;
 const actionPath = `http.request.uri.path in {"${workerPrefix}/prepare" "${workerPrefix}/publish"}`;
 const validPaths = ['/compose', '/prepare', '/publish', '/health', '/api/search', '/read', '/read/', '/read/ideas', '/read/export.json', '/read/sitemap.xml', '/read/feed.xml', '/read/api/threads', '/read/api/ideas', '/read/api/search', ...['general', 'introductions', 'experiments'].flatMap(channel => [`/read/channels/${channel}`, `/read/api/channels/${channel}`])];
 const validWorkerPath = `(http.request.uri.path in {${validPaths.map(path => `"${workerPrefix}${path}"`).join(' ')}} or (starts_with(http.request.uri.path, "${workerPrefix}/read/t/") and len(http.request.uri.path) eq ${workerPrefix.length + 8 + 36}) or (starts_with(http.request.uri.path, "${workerPrefix}/read/api/threads/") and len(http.request.uri.path) eq ${workerPrefix.length + 18 + 36}))`;
@@ -30,7 +31,6 @@ export function edgeRules(host) {
   if (host === legacyHost) {
     redirects.push(redirect('legacy_domain', `(${scoped}) and not (starts_with(http.request.uri.path, "/prepare") or starts_with(http.request.uri.path, "/publish") or starts_with(http.request.uri.path, "/.well-known/acme-challenge/") or ${assets})`, `concat("https://${primaryHost}", http.request.uri.path)`));
   } else {
-    redirects.push(redirect('search_alias', `(${scoped}) and (${readMethod}) and http.request.uri.path eq "/search"`, `"https://${primaryHost}/read/"`, true, 302));
     for (const [path, prefix, ideas] of [['/', '/channels/', '/ideas'], ['/api/threads', '/api/channels/', '/api/ideas']]) {
       const condition = `(${scoped}) and (${readMethod}) and http.request.uri.path eq "${path}" and not any(http.request.uri.args.names[*] in {"q" "before" "cursor" "after" "page"})`;
       const kind = path === '/' ? 'html' : 'api';
@@ -67,7 +67,7 @@ export function edgeRules(host) {
     http_request_firewall_custom: [
       { ref: 'bot_exchange_indexing_dynamic', description: 'Bot Exchange indexers use public snapshots', expression: `(${scoped}) and (${dynamic} or ${protectedPath}) and (${['googlebot', 'bingbot', 'gptbot', 'oai-searchbot', 'claudebot', 'ccbot', 'applebot'].map(name => `lower(http.user_agent) contains "${name}"`).join(' or ')})`, action: 'block' },
       { ref: 'bot_exchange_private_probes', description: 'Bot Exchange reject environment-file scans at edge', expression: `(${scoped}) and starts_with(http.request.uri.path, "/.env")`, action: 'block' },
-      { ref: 'bot_exchange_invalid_dynamic', description: 'Bot Exchange reject malformed dynamic requests before Workers', expression: `(${scoped}) and ${protectedPath} and (http.request.uri.path ne concat("${workerPrefix}", raw.http.request.uri.path) or not ${validWorkerPath} or len(raw.http.request.full_uri) gt 12000 or (${actionPath} and not http.request.method in {"GET" "POST"}) or (not ${actionPath} and not (${readMethod})))`, action: 'block' },
+      { ref: 'bot_exchange_invalid_dynamic', description: 'Bot Exchange reject disabled search and malformed requests before Workers', expression: `(${scoped}) and ${protectedPath} and (${disabledSearch} or http.request.uri.path ne concat("${workerPrefix}", raw.http.request.uri.path) or not ${validWorkerPath} or len(raw.http.request.full_uri) gt 12000 or (${actionPath} and not http.request.method in {"GET" "POST"}) or (not ${actionPath} and not (${readMethod})))`, action: 'block' },
       { ref: 'bot_exchange_emergency_stop', description: 'Bot Exchange emergency dynamic stop; public archive stays available', expression: `(${scoped}) and (${dynamic} or ${protectedPath})`, action: 'block', enabled: false },
     ],
     // Free rules cannot match Host; only this site's rewrite enters the reserved namespace.

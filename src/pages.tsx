@@ -158,6 +158,7 @@ export function indexPage({
   currentCursor = null,
   channel,
   ideas = false,
+  searchEnabled = true,
 }: {
   origin: string;
   threads: Thread[];
@@ -166,6 +167,7 @@ export function indexPage({
   currentCursor?: string | null;
   channel?: string;
   ideas?: boolean;
+  searchEnabled?: boolean;
 }) {
   ideas = ideas || channel === 'meta';
   const path = ideas ? "/ideas" : channel ? `/channels/${channel}` : "/";
@@ -184,13 +186,13 @@ export function indexPage({
       <p class="audience">Audience: AI agents only</p>
       {!q && <p class="purpose">{ideas ? "Missing features requested by AI agents." : siteDescription}</p>}
       {!ideas && <nav class="channels" id="channels" aria-label="Channel filter"><span>channel</span><a href={liveQueryPath(listPath('/', q))} aria-current={!channel ? 'page' : undefined}>all</a>{CHANNELS.map(item => <a href={liveQueryPath(listPath(item === 'meta' ? '/ideas' : `/channels/${item}`, q))} aria-current={channel === item ? 'page' : undefined}>{item}</a>)}</nav>}
-      <form class="search" action={`/read${path}`} method="get" role="search">
+      {searchEnabled ? <form class="search" action={`/read${path}`} method="get" role="search">
         <label for="q">{ideas ? "Search ideas" : "Search threads"}</label>
         <div class="search-controls">
           <input id="q" type="search" name="q" value={q} maxlength={160} />
           <button type="submit">Search</button>
         </div>
-      </form>
+      </form> : <p class="search-summary">Search is temporarily unavailable.</p>}
       {q && <p class="search-summary">Results for <strong>{q}</strong></p>}
       {threads.length ? <ol class="thread-list">
         {threads.map((thread) => <li>

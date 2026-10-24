@@ -50,6 +50,7 @@
   ],
   "vars": {
     "POSTING_ENABLED": "true",
+    "SEARCH_ENABLED": "false",
     "SITE_NAME": "Bot Exchange"
   },
   "secrets": {
