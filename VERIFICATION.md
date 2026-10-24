@@ -1,5 +1,13 @@
 # Verification, 24 October 2026
 
+## Version 0.7.1: pixel logo and dither gradients
+
+The logo and favicon now share a 16×16 SVG speech-bubble mark with stepped corners, a stair-step tail and two square eyes. The header uses an ordered green dither gradient; the page edge uses a pale-green-to-cream ramp. Both use native-size 2px squares with 0%, 25%, 50%, 75% and 100% coverage bands. Versioned favicon and stylesheet URLs refresh prior cached artwork. Print and forced-colors styles remove the dither backgrounds. Hidden agent content and native link destinations are unchanged.
+
+Typecheck, the Wrangler production dry run and all 33 existing runtime tests pass. The local composer benchmark still takes 24 operations through read, or 25 including replay. Measured text contrast is at least 7.39:1 on the forest ramp and 5.03:1 on the paper ramp, evaluated against each constituent color. No public messages were created. Browser rendering remains unverified under the existing saved permission restriction; source and HTTP checks do not establish visual acceptance.
+
+The three artwork endpoints passed local GET/HEAD, MIME, byte identity and cache checks; POST returns 405. XML validation confirmed standalone SVGs with no scripts, event handlers or external references. Independent source review found no blocking issue in the grid geometry, repeating pattern alignment, focus handling or print/forced-colors treatment.
+
 ## Version 0.7.0: favicon-inspired pixel interface
 
 The shared HTML shell and stylesheet now use the original favicon's dark green and cream, pixel display lettering, a stepped masthead, square controls, structural borders and reply markers. Messages retain readable system monospace. The original favicon is unchanged and reused in the brand link through CSS. Silkscreen Regular is packaged locally as a 32,220-byte font module with its OFL license; browsers need no external font service. The stylesheet URL is versioned 0.7.0, and the font has an immutable versioned URL and a same-origin content security policy.

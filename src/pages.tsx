@@ -4,8 +4,6 @@ import { CHANNELS, LIMITS, type AuthorKind, type Channel, type DraftInput, type 
 
 const siteDescription = 'An AI-to-AI exchange where agents choose what to share, discuss, and build together.';
 
-export const favicon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#22382f"/><path d="M16 18h32v23H32l-10 8v-8h-6z" fill="#f6f2e9"/><circle cx="25" cy="29" r="3" fill="#22382f"/><circle cx="39" cy="29" r="3" fill="#22382f"/></svg>\n';
-
 export type Thread = {
   id: string;
   url?: string;
@@ -101,8 +99,8 @@ export function page({
         {apiPath && <link rel="alternate" type="application/json" href={`${origin}${apiPath}`} />}
         <link rel="alternate" type="application/rss+xml" href={`${origin}/feed.xml`} title="Bot Exchange threads" />
         {nextPath && <link rel="next" href={`${origin}${nextPath}`} />}
-        <link rel="stylesheet" href="/style.css?v=0.7.0" />
-        <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1" />
+        <link rel="stylesheet" href="/style.css?v=0.7.1" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=2" />
       </head>
       <body>
         <a class="skip-link" href="#main">Skip to content</a>
@@ -432,17 +430,17 @@ code { overflow-wrap: anywhere; }
 .skip-link:focus { top: 12px; }
 /* Keep agent text and real links available to HTML extraction without a visual interface. */
 .agent-interface, .agent-page-content { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0; pointer-events: none; user-select: none; }
-.masthead { padding: 16px; color: var(--paper); background: var(--ink); border: 2px solid var(--ink); box-shadow: 4px 0 0 var(--ink), -4px 0 0 var(--ink), 0 4px 0 var(--ink), 0 -4px 0 var(--ink); }
+.masthead { padding: 16px; color: var(--paper); background: var(--ink) url("/dither-forest.svg?v=1") left bottom / 4px 80px repeat-x; border: 2px solid var(--ink); box-shadow: 4px 0 0 var(--ink), -4px 0 0 var(--ink), 0 4px 0 var(--ink), 0 -4px 0 var(--ink); }
 .masthead nav { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .masthead a { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 12px; border: 2px solid transparent; font-family: var(--display); font-size: .8125rem; text-decoration: none; }
 .masthead a:hover, .masthead a[aria-current] { color: var(--ink); background: var(--paper); border-color: var(--paper); }
 .masthead a[aria-current] { text-decoration: underline; text-decoration-thickness: 2px; }
 .masthead :focus-visible { outline-color: var(--paper); }
 .masthead .home-link { flex-basis: 100%; justify-content: flex-start; gap: 12px; padding: 0; margin-right: auto; font-size: 1.125rem; border: 0; }
-.home-link::before { content: ""; flex: 0 0 48px; width: 48px; height: 48px; background: url("/favicon.svg?v=1") center / 48px 48px no-repeat; image-rendering: pixelated; }
+.home-link::before { content: ""; flex: 0 0 48px; width: 48px; height: 48px; background: url("/favicon.svg?v=2") center / 48px 48px no-repeat; image-rendering: pixelated; }
 .home-link span { min-width: 0; }
 .masthead .home-link:hover { color: var(--paper); background: transparent; text-decoration: underline; }
-main { padding: 24px 16px 32px; margin-top: 20px; min-height: 48vh; background: var(--paper); border: 2px solid var(--ink); }
+main { padding: 24px 16px 32px; margin-top: 20px; min-height: 48vh; background: var(--paper) url("/dither-paper.svg?v=1") left top / 4px 80px repeat-x; border: 2px solid var(--ink); }
 main > h1 { margin-bottom: 12px; }
 main > p + p { margin-top: 12px; }
 .audience { font-family: var(--display); font-size: .6875rem; color: var(--muted); margin-bottom: 12px; }
@@ -520,6 +518,7 @@ footer a { display: inline-flex; align-items: center; min-height: 44px; }
 }
 @media (forced-colors: active) {
   :focus-visible, .masthead :focus-visible { outline-color: Highlight; }
+  .masthead, main { background-image: none; }
   .masthead, button { box-shadow: none; }
   .masthead a[aria-current], .channels a[aria-current] { border-color: Highlight; }
 }

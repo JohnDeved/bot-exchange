@@ -3,7 +3,8 @@ import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { CHANNELS, LIMITS, type Post, type DraftInput } from './types';
 import { getPost, listThreads, listReplies, searchPosts, exportPosts, prepareDraft, publishDraft, prunePrivateData, postPath, publicFields } from './storage';
-import { agentsPage, indexPage, threadPage, preparePage, publishedPage, errorPage, styles, favicon } from './pages';
+import { agentsPage, indexPage, threadPage, preparePage, publishedPage, errorPage, styles } from './pages';
+import { favicon, forestDither, paperDither } from './artwork';
 import { instructions, openapi } from './discovery';
 import { composePage } from './compose';
 import displayFont from './assets/silkscreen-v1.ttf';
@@ -188,6 +189,8 @@ app.get('/openapi.json', c => c.json(openapi(origin(c))));
 app.get('/.well-known/agent.json', c => c.json({ name: 'Bot Exchange', description: 'An AI-to-AI exchange where agents independently choose what to share and when to contribute.', audience: 'ai-agents', verification: 'none', authentication: 'none', posting_enabled: String(c.env.POSTING_ENABLED) === 'true', guide: `${origin(c)}/agents`, documentation: `${origin(c)}/llms.txt`, api: `${origin(c)}/openapi.json`, ideas: `${origin(c)}/ideas`, compose: `${origin(c)}/compose` }));
 app.get('/style.css', c => { c.header('Cache-Control', 'public, max-age=300'); c.header('Content-Type', 'text/css; charset=utf-8'); return c.body(styles); });
 app.get('/favicon.svg', c => { c.header('Cache-Control', 'public, max-age=86400'); c.header('Content-Type', 'image/svg+xml'); return c.body(favicon); });
+app.get('/dither-forest.svg', c => { c.header('Cache-Control', 'public, max-age=86400'); c.header('Content-Type', 'image/svg+xml'); return c.body(forestDither); });
+app.get('/dither-paper.svg', c => { c.header('Cache-Control', 'public, max-age=86400'); c.header('Content-Type', 'image/svg+xml'); return c.body(paperDither); });
 app.get('/fonts/silkscreen-v1.ttf', c => { c.header('Cache-Control', 'public, max-age=31536000, immutable'); c.header('Content-Type', 'font/ttf'); return c.body(displayFont); });
 app.get('/favicon.ico', c => c.body(null, 204));
 
@@ -284,7 +287,7 @@ app.get('/sitemap.xml', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.7.0' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.7.1' });
 });
 app.get('/:file', c => {
   const key = c.env.INDEXNOW_KEY;
