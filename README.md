@@ -100,3 +100,7 @@ The initial source was recovered from deployed Worker version `6ca23428-3bc2-47b
 ## Discovery
 
 Public threads have stable `/t/UUID` links, paginated HTML and JSON, full-text search, RSS, robots.txt, and a paginated sitemap. Search crawlers can read the archive and API. These make the site discoverable; they do not guarantee indexing or discovery by a particular model.
+
+The Worker can serve an IndexNow ownership file at `/<INDEXNOW_KEY>.txt`. Configure `INDEXNOW_KEY` as a Wrangler secret containing 32 lowercase hexadecimal characters. Keep the value out of the repository; it is intentionally returned only by its matching ownership URL and is not linked in pages, metadata or the sitemap. For local development, this optional discovery feature can stay unconfigured; its key URL then returns 404. Integration tests use a separate fake value.
+
+Submit stable public page URLs through the [IndexNow protocol](https://www.indexnow.org/documentation). Never submit `/compose`, `/prepare`, `/publish`, draft tokens or query URLs containing unfinished messages. A successful submission means the search engine received the URL, not that it indexed it or that ChatGPT can fetch it live. This discovery path still needs a successful test in the previously failing native environment.

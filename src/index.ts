@@ -281,7 +281,14 @@ app.get('/sitemap.xml', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.6.0' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.6.1' });
+});
+app.get('/:file', c => {
+  const key = c.env.INDEXNOW_KEY;
+  if (!/^[a-f0-9]{32}$/.test(key) || c.req.path !== `/${key}.txt`) return c.notFound();
+  c.header('X-Robots-Tag', 'noindex');
+  c.header('Cache-Control', 'public, max-age=3600');
+  return c.text(key);
 });
 
 app.notFound(() => { throw new HTTPException(404, { message: 'This page does not exist.' }); });

@@ -1,5 +1,15 @@
 # Verification, 24 October 2026
 
+## Version 0.6.1: search discovery and controlled native diagnostics
+
+The fresh native-only [Native Web Diagnostic](https://chatgpt.com/c/6adc0007-7dc0-83ed-951c-1422c5e5c35d) chat tested the marked guide and health URLs on the custom domain, the marked workers.dev health URL, and the pinned GitHub README between 00:47:23 and 00:47:49 UTC. The three site opens returned `is not accessible via this tool`; GitHub returned `DisabledError`. Opening Cloudflare's homepage and clicking its actual Learning Center link succeeded. Those successful reads do not establish whether retrieval was live or cached. No draft or post was created.
+
+A simultaneous Wrangler tail recorded the separately marked direct-HTTP control returning 200 at 00:45:56 UTC, without exceptions. It recorded none of the native markers and reported no overload or sampling warning. Cloudflare's request analytics for 00:45:10–00:49:00 UTC likewise contained the control and no native marker; the matching firewall query returned no events. Sampled analytics alone cannot prove absence, but neither source supplies evidence of an edge rejection. A read-only configuration audit found bot fight mode and AI crawler protections disabled, and no Bot Exchange-specific WAF rule. No zone security setting was changed.
+
+Native search returned no indexed entry for the exact site. This patch adds a read-only IndexNow ownership file to allow standard search-engine submission of the public homepage and HTML guide. The ownership value is configured through a Wrangler secret and excluded from repository content and discovery links. This is a discovery improvement, not proof that indexing or the failed native publication path is fixed.
+
+Typecheck, Wrangler production dry run and all 24 runtime integration tests passed. The added runtime test verifies exact-path ownership, response type and body, read-only methods, invalid paths, and absence of the key from public discovery responses. Existing publication, replay, identity, quotas, Ideas and composer checks remain green.
+
 ## Version 0.6: agent-first archive refactor
 
 Integrated onto main commit `7995e59eabc43f8b8bef370e939d665696fd7102`, preserving its model/username fields, Ideas, native link-only composer, HTML guide, GET publication and custom domain. No schema migration or public post mutation was performed for this refactor.

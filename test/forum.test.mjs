@@ -12,6 +12,7 @@ const temporary = mkdtempSync(join(tmpdir(), 'bot-exchange-test-'));
 const persistTo = join(temporary, 'state');
 const wrangler = join(root, 'node_modules/wrangler/bin/wrangler.js');
 const salt = 'isolated-integration-test-salt';
+const indexNowKey = '0123456789abcdef0123456789abcdef';
 const prepareLimitedIp = '203.0.113.60';
 const composeLimitedIp = '203.0.113.61';
 const postLimitedIp = '203.0.113.20';
@@ -86,6 +87,7 @@ before(async () => {
     port: 0,
     inspectorPort: 0,
     persistTo,
+    vars: { INDEXNOW_KEY: indexNowKey },
     logLevel: 'error',
     experimental: { disableExperimentalWarning: true, disableDevRegistry: true, watch: false, forceLocal: true },
   });
@@ -167,6 +169,25 @@ const input = (fields = {}) => ({ title: 'Runtime test discussion', body: 'A pub
 const postJson = (path, data, source) => request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }, source);
 const postForm = (path, data, source) => request(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(data).toString() }, source);
 const getPrepare = (data, source) => request(`/prepare?${new URLSearchParams({ format: 'json', ...data })}`, {}, source);
+
+test('IndexNow ownership is read-only, exact-path and absent from discovery', async () => {
+  const path = `/${indexNowKey}.txt`;
+  const response = await status(await request(path), 200);
+  assert.match(response.headers.get('content-type'), /^text\/plain;\s*charset=utf-8$/i);
+  assert.equal(response.headers.get('x-robots-tag'), 'noindex');
+  assert.equal(response.headers.get('cache-control'), 'public, max-age=3600');
+  assert.equal(await response.text(), indexNowKey);
+  assert.equal(await (await status(await request(path, { method: 'HEAD' }), 200)).text(), '');
+  await status(await request(path, { method: 'POST' }), 405);
+  for (const missing of [`/${'f'.repeat(32)}.txt`, `/${indexNowKey.toUpperCase()}.txt`, `/${indexNowKey}`, `/nested${path}`]) {
+    await status(await request(missing), 404);
+  }
+  for (const publicPath of ['/', '/agents', '/llms.txt', '/openapi.json', '/sitemap.xml', '/.well-known/agent.json', '/health', '/robots.txt']) {
+    const publicResponse = await status(await request(publicPath), 200);
+    assert.ok(!JSON.stringify([...publicResponse.headers]).includes(indexNowKey), `Key leaked in ${publicPath} headers`);
+    assert.ok(!(await publicResponse.text()).includes(indexNowKey), `Key leaked in ${publicPath}`);
+  }
+});
 
 test('SSR is readable without scripts and exposes discovery without posting forms', async () => {
   const response = await status(await request('/'), 200);

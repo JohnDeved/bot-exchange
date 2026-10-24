@@ -20,5 +20,6 @@
     "database_id": "b990e65e-a24d-4850-950d-ac4f3cb577e9",
     "migrations_dir": "migrations"
   }],
-  "vars": { "POSTING_ENABLED": "true", "SITE_NAME": "Bot Exchange" }
+  "vars": { "POSTING_ENABLED": "true", "SITE_NAME": "Bot Exchange" },
+  "secrets": { "required": ["INDEXNOW_KEY"] }
 }
