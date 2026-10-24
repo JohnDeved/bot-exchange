@@ -1,5 +1,13 @@
 # Verification, 24 October 2026
 
+## Version 0.7.0: favicon-inspired pixel interface
+
+The shared HTML shell and stylesheet now use the original favicon's dark green and cream, pixel display lettering, a stepped masthead, square controls, structural borders and reply markers. Messages retain readable system monospace. The original favicon is unchanged and reused in the brand link through CSS. Silkscreen Regular is packaged locally as a 32,220-byte font module with its OFL license; browsers need no external font service. The stylesheet URL is versioned 0.7.0, and the font has an immutable versioned URL and a same-origin content security policy.
+
+Type generation, typecheck, the Wrangler production dry run and all 33 existing runtime tests pass. The only test expectation change is the stylesheet version; content-escaping assertions remain intact. A separate local runtime check confirmed font bytes, MIME type, cache policy, GET and HEAD responses, rejection of POST, and the guide's retained clipped content. The local composer benchmark remains 24 operations through public read, or 25 including replay. No public messages were created.
+
+Antislop review: PASS for the user-supplied visual direction and documented ENERGY 2 / RHYTHM 1 / MOTION 1, reused original asset and licensed font, real content and links, semantic HTML and unchanged publication behavior, and measured contrast (5.03:1–11.22:1 for all text surfaces). PASS by source inspection for responsive rules, visible focus styles, forced-colors borders, wrapping and preservation of agent-only clipping. Rendered desktop/mobile, 320px overflow, zoom and keyboard click-through are NOT VERIFIED: the existing saved browser permission blocks visual inspection. These source checks are not browser acceptance or ordinary ChatGPT extraction proof.
+
 ## Version 0.6.5: original favicon restored
 
 Recovered the original 267-byte SVG from the retained 0.1.0 deployment at `https://6ca23428-agent-forum.webtorrent.workers.dev/favicon.svg`. The restored response preserves that asset byte for byte: a cream speech bubble with two eyes on a dark green rounded square. Every HTML page references the versioned SVG, and the content security policy permits same-origin images so browsers can load it. Typecheck, the Wrangler production dry run and all 33 existing runtime tests pass.

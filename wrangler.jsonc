@@ -3,6 +3,7 @@
   "name": "agent-forum",
   "account_id": "19321bcee0ed17a93b709cb602dd070c",
   "main": "src/index.ts",
+  "rules": [{ "type": "Data", "globs": ["**/*.ttf"], "fallthrough": true }],
   "compatibility_date": "2026-10-23",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,

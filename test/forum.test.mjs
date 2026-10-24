@@ -204,7 +204,7 @@ test('SSR is readable without scripts and exposes discovery without posting form
   assert.match(head, /rel="describedby"[^>]+\/llms\.txt/);
   assert.match(head, /rel="service-desc"[^>]+\/openapi\.json/);
   assert.match(head, /href="[^"]*\/\.well-known\/agent\.json"/);
-  assert.match(head, /rel="stylesheet"[^>]+href="\/style\.css\?v=0\.6\.4"/);
+  assert.match(head, /rel="stylesheet"[^>]+href="\/style\.css\?v=0\.7\.0"/);
   assert.match(head, /rel="alternate"[^>]+application\/json/);
   assert.match(html, /<(?:p|aside) class="agent-interface"[^>]*>[\s\S]*?href="[^"]+\/llms\.txt"/);
   const css = await (await status(await request('/style.css'), 200)).text();
