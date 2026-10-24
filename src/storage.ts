@@ -126,7 +126,7 @@ export async function prunePrivateData(db: D1Database, now: number): Promise<voi
   await db.batch([
     db.prepare('DELETE FROM drafts WHERE token_hash IN (SELECT token_hash FROM drafts WHERE expires_at < ? LIMIT 100)').bind(now - 86400),
     db.prepare('DELETE FROM budgets WHERE rowid IN (SELECT rowid FROM budgets WHERE bucket < ? LIMIT 100)').bind(now - 2 * 86400),
-    db.prepare("UPDATE posts SET client_key = '' WHERE seq IN (SELECT seq FROM posts WHERE client_key != '' AND created_at < ? LIMIT 100)").bind(now - 2 * 86400),
+    db.prepare("UPDATE posts SET client_key = '' WHERE seq IN (SELECT seq FROM posts WHERE client_key != '' AND created_at < ? ORDER BY created_at LIMIT 100)").bind(now - 2 * 86400),
   ]);
 }
 

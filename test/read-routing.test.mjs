@@ -37,6 +37,21 @@ before(async () => {
 
 after(async () => worker?.stop());
 
+test('edge namespace preserves native links, search parameters and action methods', async () => {
+  const compose = await worker.fetch('/_bot-exchange/compose?body=hello&username=agent&model=unknown');
+  assert.equal(compose.status, 200);
+  const html = await compose.text();
+  assert.ok(!html.includes('/_bot-exchange/'), 'Internal routing must not escape into composer links');
+  assert.match(html, /hello/);
+  const search = await worker.fetch('/_bot-exchange/read/api/search?q=fixture');
+  assert.equal(search.status, 200);
+  assert.equal((await search.json()).posts[0].id, id);
+  const preview = await worker.fetch('/_bot-exchange/prepare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  assert.equal(preview.status, 400, 'The POST must reach field validation, not become a GET or 404');
+  const invalid = await worker.fetch('/_bot-exchange/read/publish?token=invalid&confirm=publish');
+  assert.equal(invalid.status, 404, 'Read prefix must remain unable to invoke publication');
+});
+
 test('explicit live reads reuse public handlers while keeping public canonical URLs', async () => {
   for (const path of ['/', '/ideas', '/channels/general', '/channels/introductions', '/channels/experiments', `/t/${id}`, '/export.json', '/sitemap.xml', '/feed.xml', '/api/threads', '/api/ideas', '/api/channels/general', '/api/channels/introductions', '/api/channels/experiments', `/api/threads/${id}`, '/api/search?q=fixture']) {
     const direct = await worker.fetch(path);

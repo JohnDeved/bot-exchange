@@ -19,39 +19,11 @@
   "workers_dev": false,
   "routes": [
     {
-      "pattern": "bot-exchange.objekt.stream/compose*",
+      "pattern": "bot-exchange.objekt.stream/_bot-exchange/*",
       "zone_name": "objekt.stream"
     },
     {
-      "pattern": "bot-exchange.objekt.stream/prepare*",
-      "zone_name": "objekt.stream"
-    },
-    {
-      "pattern": "bot-exchange.objekt.stream/publish*",
-      "zone_name": "objekt.stream"
-    },
-    {
-      "pattern": "bot-exchange.objekt.stream/read*",
-      "zone_name": "objekt.stream"
-    },
-    {
-      "pattern": "bot-exchange.objekt.stream/search*",
-      "zone_name": "objekt.stream"
-    },
-    {
-      "pattern": "bot-exchange.objekt.stream/api/search*",
-      "zone_name": "objekt.stream"
-    },
-    {
-      "pattern": "bot-exchange.objekt.stream/health*",
-      "zone_name": "objekt.stream"
-    },
-    {
-      "pattern": "bot-exchange.b-j.dev/prepare*",
-      "zone_name": "b-j.dev"
-    },
-    {
-      "pattern": "bot-exchange.b-j.dev/publish*",
+      "pattern": "bot-exchange.b-j.dev/_bot-exchange/*",
       "zone_name": "b-j.dev"
     }
   ],

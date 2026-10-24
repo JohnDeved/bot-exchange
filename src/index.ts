@@ -8,6 +8,7 @@ import { favicon, forestDither, paperDither } from './artwork';
 import { instructions, openapi } from './discovery';
 import { composePage } from './compose';
 import { getComposeReply } from './compose-reply';
+import { cachedSearchRows, invalidateSearchRows } from './search-cache';
 import { refreshPublicSnapshots } from './snapshots';
 import displayFont from './assets/silkscreen-v1.ttf';
 import bodyFont from './assets/pixel-operator-v1.ttf';
@@ -155,6 +156,10 @@ async function matchingThreads(db: D1Database, q: string, before?: number, selec
   return result.results;
 }
 
+function searchThreads(c: Context<App>, q: string, before?: number, selectedChannel?: string) {
+  return cachedSearchRows(c.env.DB, { kind: 'threads', query: q, before, channel: selectedChannel, origin: origin(c), cache: caches.default, waitUntil: promise => c.executionCtx.waitUntil(promise) }, normalized => matchingThreads(c.env.DB, normalized, before, selectedChannel));
+}
+
 const asThread = (post: Post) => ({ id: post.id, title: post.title, agent: post.username, model: post.model, channel: post.channel, author_kind: post.author_kind, body: post.body, created_at: new Date(post.created_at * 1000).toISOString(), updated_at: new Date(post.updated_at * 1000).toISOString(), reply_count: post.reply_count });
 
 function nextUrl(c: Context<App>, next: number | null, direction: 'before' | 'after', filters: Record<string, string | undefined> = {}): string | null {
@@ -170,7 +175,7 @@ app.on('GET', ['/', '/ideas', ...staticChannels.map(channel => `/channels/${chan
   const q = query(c);
   const before = cursor(c.req.query('before') || c.req.query('cursor'));
   const selectedChannel = ideas ? 'meta' : channel(c.req.path.startsWith('/channels/') ? c.req.path.slice('/channels/'.length) : c.req.query('channel'));
-  const rows = q ? await matchingThreads(c.env.DB, q, before, selectedChannel) : await listThreads(c.env.DB, selectedChannel, before);
+  const rows = q ? await searchThreads(c, q, before, selectedChannel) : await listThreads(c.env.DB, selectedChannel, before);
   const { items, next } = paginate(rows);
   if (q || before || c.req.query('fresh')) c.header('X-Robots-Tag', 'noindex, follow');
   return c.html(indexPage({ origin: origin(c), threads: items.map(asThread), q, channel: selectedChannel, ideas, nextCursor: next ? String(next) : null, currentCursor: before ? String(before) : null }));
@@ -248,6 +253,7 @@ app.on(['GET', 'POST'], '/publish', async c => {
   const token = values.get('token') || '';
   if (!/^[a-f0-9]{64}$/.test(token)) throw new HTTPException(400, { message: 'Use the complete token from the preview.' });
   const result = await publishDraft(c.env.DB, token, Math.floor(Date.now() / 1000));
+  if (!result.replayed) invalidateSearchRows(c.env.DB, result.post.seq);
   const url = new URL(postPath(result.post), c.req.url).href;
   let verificationUrl: string | undefined;
   try {
@@ -285,7 +291,7 @@ app.on('GET', ['/api/threads', '/api/ideas', ...staticChannels.map(channel => `/
   const before = cursor(c.req.query('before') || c.req.query('cursor'));
   const fixedChannel = c.req.path === '/api/ideas' ? 'meta' : c.req.path.startsWith('/api/channels/') ? c.req.path.slice('/api/channels/'.length) : undefined;
   const selectedChannel = channel(fixedChannel || c.req.query('channel'));
-  const { items, next } = paginate(q ? await matchingThreads(c.env.DB, q, before, selectedChannel) : await listThreads(c.env.DB, selectedChannel, before));
+  const { items, next } = paginate(q ? await searchThreads(c, q, before, selectedChannel) : await listThreads(c.env.DB, selectedChannel, before));
   return c.json({ threads: items, next_cursor: next, next_url: nextUrl(c, next, 'before', {q, channel: fixedChannel ? undefined : selectedChannel}) });
 });
 app.get('/api/threads/:id', async c => {
@@ -296,7 +302,8 @@ app.get('/api/threads/:id', async c => {
 });
 app.get('/api/search', async c => {
   const q = query(c);
-  const { items, next } = paginate(q ? await searchPosts(c.env.DB, q, cursor(c.req.query('before'))) : []);
+  const before = cursor(c.req.query('before'));
+  const { items, next } = paginate(q ? await cachedSearchRows(c.env.DB, { kind: 'posts', query: q, before, origin: origin(c), cache: caches.default, waitUntil: promise => c.executionCtx.waitUntil(promise) }, normalized => searchPosts(c.env.DB, normalized, before)) : []);
   return c.json({ posts: items, next_cursor: next, next_url: nextUrl(c, next, 'before', {q}) });
 });
 app.get('/export.json', async c => {
@@ -342,7 +349,7 @@ app.get('/sitemaps/:file', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.8.0' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.8.1' });
 });
 app.get('/:file', c => {
   const key = c.env.INDEXNOW_KEY;
@@ -369,6 +376,10 @@ const readPaths = new Set(['/', '/ideas', '/export.json', '/sitemap.xml', '/feed
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith('/_bot-exchange/')) {
+      url.pathname = url.pathname.slice('/_bot-exchange'.length);
+      request = new Request(url, request);
+    }
     if (url.pathname === '/read' || url.pathname.startsWith('/read/')) {
       const path = url.pathname.slice('/read'.length) || '/';
       const thread = path.match(/^\/(?:api\/threads|t)\/([^/]+)$/);
