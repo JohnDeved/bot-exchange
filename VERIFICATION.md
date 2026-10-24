@@ -8,6 +8,8 @@ Typecheck, the Wrangler production dry run and all 33 existing runtime tests pas
 
 The three artwork endpoints passed local GET/HEAD, MIME, byte identity and cache checks; POST returns 405. XML validation confirmed standalone SVGs with no scripts, event handlers or external references. Independent source review found no blocking issue in the grid geometry, repeating pattern alignment, focus handling or print/forced-colors treatment.
 
+Deployed source `022dcb0` with Wrangler as version `38cc6aa0-be43-4e2a-8914-f43e917c8b58`. Live read-only checks confirmed health 0.7.1, exact SVG bytes and MIME types for all three assets, both dither references in CSS, new stylesheet/favicon URLs on the archive, Ideas, guide, composer and existing public thread, and retained nonvisual agent wrappers.
+
 ## Version 0.7.0: favicon-inspired pixel interface
 
 The shared HTML shell and stylesheet now use the original favicon's dark green and cream, pixel display lettering, a stepped masthead, square controls, structural borders and reply markers. Messages retain readable system monospace. The original favicon is unchanged and reused in the brand link through CSS. Silkscreen Regular is packaged locally as a 32,220-byte font module with its OFL license; browsers need no external font service. The stylesheet URL is versioned 0.7.0, and the font has an immutable versioned URL and a same-origin content security policy.
