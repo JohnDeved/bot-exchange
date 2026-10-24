@@ -404,6 +404,34 @@ test('HTML agent guide provides a navigable path from archive to both composers'
   assert.match(await (await request('/sitemaps/site.xml')).text(), /\/agents<\/loc>/);
 });
 
+test('composer states retain spaces and keyboard choices without a canonical or blank reset link', async () => {
+  for (const { space, keys, letter } of [{ space: '+', keys: 'lower', letter: 'a' }, { space: '%20', keys: 'upper', letter: 'A' }]) {
+    const page = await html(await request(`/compose?username=claude&model=claude-opus-5-5&title=I${space}can&channel=introductions&field=title&keys=${keys}`));
+    assert.equal(page.headers.get('cache-control'), 'no-store');
+    assert.doesNotMatch(page.source, /<link\b[^>]*rel="canonical"/);
+    assert.ok(!page.links.some(href => {
+      const url = new URL(href, 'https://example.test');
+      return url.pathname === '/compose' && !url.search;
+    }), 'An editing page must not offer an unrelated blank composer');
+    assert.ok(page.anchors.some(anchor => anchor.text === 'HTML agent guide'));
+    assert.ok(page.anchors.some(anchor => anchor.text === 'plain-text protocol'));
+    assert.match(page.text, /Title \(5\/120\)/);
+    assert.ok(page.text.includes('I can'));
+    const edit = new URL(textLink(page, `Add ${letter}`));
+    assert.equal(edit.searchParams.get('title'), `I can${letter}`);
+    assert.equal(edit.searchParams.get('keys'), keys);
+    assert.equal(edit.searchParams.get('username'), 'claude');
+    assert.equal(edit.searchParams.get('model'), 'claude-opus-5-5');
+    const edited = await html(await request(edit.href));
+    assert.ok(edited.text.includes(`I can${letter}`));
+  }
+  for (const path of ['/', '/agents', `/t/${fixtureId(1)}`]) {
+    const page = await html(await request(path));
+    const canonical = decodeHtml(page.source.match(/<link rel="canonical" href="([^"]+)"/)?.[1] || '');
+    assert.equal(new URL(canonical).pathname, path, 'Public pages keep their canonical URL');
+  }
+});
+
 test('legacy records expose username and unknown model; root pagination has no gaps', async () => {
   const first = await json(await request('/api/threads?channel=experiments'));
   assert.equal(first.threads.length, 20);
@@ -446,6 +474,7 @@ test('HTML-only browsing can review, publish and follow a thread and reply witho
   const expected = { ...fields, title: fields.title.trim(), body: fields.body.trim().replaceAll('\r\n', '\n'), username: fields.username.trim(), model: fields.model.trim() };
   const preview = await html(await request(`/prepare?${new URLSearchParams(fields)}`));
   assert.equal(preview.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive');
+  assert.doesNotMatch(preview.source, /<link\b[^>]*rel="canonical"/);
   assert.equal(preview.headers.get('vary'), 'Accept');
   assert.match(preview.source, /<a\b[^>]*href="https?:\/\/[^"]+\/publish\?[^"]*"[^>]*rel="nofollow"/);
   for (const value of [expected.title, expected.body, `Username: ${expected.username}`, `Model: ${expected.model}`, 'Author kind: agent', 'Channel: meta', 'Destination: New thread', 'Draft expires:']) assert.ok(preview.text.includes(value), `Preview is missing ${value}`);
@@ -461,6 +490,7 @@ test('HTML-only browsing can review, publish and follow a thread and reply witho
 
   const published = await html(await request(publishUrl));
   assert.equal(published.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive');
+  assert.doesNotMatch(published.source, /<link\b[^>]*rel="canonical"/);
   assert.equal(published.headers.get('vary'), 'Accept');
   for (const value of [expected.title, expected.body, expected.username, expected.model, 'Author kind: agent', 'Channel: meta']) assert.ok(published.text.includes(value), `Receipt is missing ${value}`);
   const threadUrl = published.links.find(href => /^https?:\/\/[^/]+\/t\/[^/?#]+$/.test(href));

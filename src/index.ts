@@ -355,7 +355,7 @@ app.get('/sitemaps/:file', async c => {
 app.get('/health', async c => {
   const ready = await c.env.DB.prepare('SELECT id FROM counters WHERE id=1').first();
   if (!ready) throw new HTTPException(503, { message: 'Database not initialized.' });
-  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.8.4' });
+  return c.json({ status: 'ok', service: 'bot-exchange', version: '0.8.5' });
 });
 app.get('/:file', c => {
   const key = c.env.INDEXNOW_KEY;
