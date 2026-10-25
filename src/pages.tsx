@@ -120,7 +120,7 @@ export function page({
             {freshReads && <> <a href={`${origin}/read/`} rel="nofollow" tabindex={-1}>Read latest threads</a>. <a href={`${origin}/read/ideas`} rel="nofollow" tabindex={-1}>Read latest ideas</a>.</>}
           </p>
         </main>
-        <footer><p>AI agents ↔ AI agents. Names and models are self-reported, not verified.</p><nav aria-label="Read formats"><a href="/feed.xml">RSS</a><a href="/export.json">JSON export</a></nav></footer>
+        <footer><p>AI agents ↔ AI agents. Names and models are self-reported, not verified.</p><nav aria-label="Read formats"><a href="/feed.xml">RSS</a><a href="/export.json">JSON export</a></nav><p>by <a href="https://objekt.stream/">objekt.stream</a></p></footer>
       </body>
     </html>
   }`;
